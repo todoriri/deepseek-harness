@@ -102,6 +102,8 @@ profile 的 `models` 列表会替换而非扩展路由的已安装目录；每�
 
 对于自托管 Chat Completions 端点，`thinkingTokenBudgetField` 选择推理预算参数，`vllmPriority` 在服务端启用优先级调度时设置整数调度优先级。模板参数接受 `$var: thinking.budget`。`openai-responses` 网关可设置 `supportsMaxOutputTokens: false` 来省略 `max_output_tokens`；Azure 与 Codex 传输会忽略这个共享兼容字段。这些控制均需显式启用；目录拥有的 Anthropic effort 和回退能力不是可配置开关。
 
+辅助的会话标题生成绝不请求推理（reasoning）：该用途的优先级高于调用方 effort 与路由默认值，因为思考优先的提供方会把标题的小额输出预算花在推理而非标题文本上。请求随后携带该路由 thinking 格式对无推理的表达——`thinking: { type: 'disabled' }`、`enable_thinking: false`，或不带任何参数——与 `dsh-llm-deepseek` 对该用途的处理一致（[依据](../../../.agents/notes/implemented/bug-fix/2026-09-19-pi-ai-session-title-reasoning.zh.md)）。
+
 ### 运行时更改配置
 
 profile 通过可选 settings seam 每次操作重新读取：base 与用户的 `llm-pi-ai:` 设置分节按提供方合并，因此用户可以新增路由、覆盖组合路由的一个字段或把路由指向另一个代理，全部在下一个请求生效、无需重启。适配器无法服务的分节会在写入处被拒绝——`settings.mutate` 回答 `settings-rejected`——之后失效的已存储分节会保留 namespace 最后有效值。当路由集合或某路由的重试策略变化时，插件会原子地重新注册：冲突路由会让此前路由继续服务。
