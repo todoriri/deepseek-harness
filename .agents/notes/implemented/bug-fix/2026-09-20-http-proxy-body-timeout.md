@@ -1,0 +1,25 @@
+# Agent Note: http-proxy owns an optional undici body timeout
+
+Status: implemented
+
+## Problem
+
+Node's built-in `fetch` runs on undici, whose global dispatcher arms `bodyTimeout` and `headersTimeout` at 300000 ms. A streaming provider sends response headers immediately, then no body bytes until its prefill finishes, so a prefill longer than five minutes is aborted by the client's own transport as a bare `TypeError: terminated` (`cause` `UND_ERR_BODY_TIMEOUT`). `dsh-llm-pi-ai` flattens that to a retryable `TRANSPORT` error ([`stream.ts`](../../../../packages/llm/llm-pi-ai/src/stream.ts) discards the `cause` chain) and retries into the same wait, each retry re-sending the whole context. The adapter's `streamIdleTimeoutMs` cannot pre-empt it: that watchdog ([`config.ts`](../../../../packages/llm/llm-pi-ai/src/config.ts) `DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300000`, armed in [`adapter.ts`](../../../../packages/llm/llm-pi-ai/src/adapter.ts)) fires on stream silence, while the abort comes from the transport. This is [deepseek-ai/deepseek-harness#5673](https://github.com/deepseek-ai/deepseek-harness/discussions/5673); a local teacher whose long-context prefill exceeds five minutes is guaranteed a client-side kill-and-retry loop.
+
+## Decision
+
+`dsh-http-proxy` — the package that already owns undici's global dispatcher — reads one launch-environment variable, `DSH_HTTP_BODY_TIMEOUT_MS`, and arms undici's `bodyTimeout` and `headersTimeout` from it. One value drives both, because a streaming provider's silent gap is in the body. `installProxyFromEnvironment` resolves it from the same `EnvLookup` the proxy policy reads, so it honours the launcher's exported-variable-then-`$DSH_HOME/.env` layering.
+
+Resolution: absent or blank installs nothing new, so a process with no proxy keeps undici's own global dispatcher and the "one answer per process, nothing installed when nothing answers" invariant that [`install.spec.ts`](../../../../packages/util/http-proxy/tests/install.spec.ts) pins holds unchanged. A value of `0` disables the bound. A positive value applies to every request this process routes. A value that is not a count of milliseconds is reported and skipped, matching how the proxy reports an unusable value.
+
+The bound reaches all three of the dispatcher's undici construction sites: the policy Agent and every per-origin client its factory builds, the direct Agent installed when a direct policy displaces a proxied one, and a direct Agent newly installed when there is no proxy but a bound is configured. undici's `ProxyAgent` builds its inner forward pool with only the connector and drops client timeouts, so the bound is re-applied through a `factory` on it — closing the proxied-path gap the upstream proposal acknowledged it left open. Every construction stays inside this package, so `verify-no-bare-dispatcher` passes with no exemption.
+
+## Alternatives considered
+
+**A second dispatcher installer in `dsh-llm-pi-ai` (the upstream `egress.ts` shape).** Rejected: `verify-no-bare-dispatcher` forbids `new Agent(...)` and a `dispatcher` option outside this package, and a second `setGlobalDispatcher` owner recreates the single-global-slot contention this package exists to hold. It would also leave MCP-over-HTTP, web search, and web fetch on undici's default.
+
+**A per-request loopback-scoped `fetch` from the adapter.** Deferred: pi-ai `0.85.1` does accept a per-request `fetch` (`openai-completions` threads `options.fetch` into the `openai` client; `pi-messages` calls `options?.fetch ?? globalThis.fetch`), and [`web-fetch-http`](../../../../packages/web/web-fetch-http/src/network.ts) shows the sanctioned `proxy-exempt:` per-request dispatcher. But it is LLM-scoped and fixes only one consumer, needs an adapter fetch seam, and does not bound the other egress paths a process-wide owner covers.
+
+## Consequences
+
+On a deployment that sets `DSH_HTTP_BODY_TIMEOUT_MS` to a finite value above 300000, a teacher prefill longer than five minutes streams to completion instead of being client-killed and retried, so the `terminated`/`TRANSPORT` retry loop stops. The variable is unset by default, so timeout ownership stays with the adapter's idle watchdog and no shipped profile changes behaviour; the snapshot corpus is unaffected because no snapshot mounts this knob. A value at or below undici's 1000 ms timer resolution is not enforced, a value of `0` removes the only body-timeout the non-LLM egress paths have, and the bound reaches only in-process requests on the global dispatcher — not a worker thread's dispatcher, `node:http` telemetry, or a spawned child. [`install.spec.ts`](../../../../packages/util/http-proxy/tests/install.spec.ts) covers a stalled body aborting under a finite bound on the direct and the proxied path, `0` letting it survive, an unusable value reported and the default left in place, and the unset identity of the global dispatcher. The knob and its limits are documented in the package [README](../../../../packages/util/http-proxy/README.md).

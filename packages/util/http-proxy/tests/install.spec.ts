@@ -15,8 +15,24 @@ import { PROXY_ENV_NAMES } from '../src/policy.ts'
 let proxied: string[] = []
 let proxy: Server
 let origin: Server
+let slow: Server
 let proxyUrl: string
 let originUrl: string
+let slowUrl: string
+
+/**
+ * How long the slow servers withhold a response body after sending headers, in milliseconds. It sits
+ * well above {@link BODY_TIMEOUT_MS} and undici's own 1000 ms timer resolution, so a bound below it
+ * fires before the body arrives while `0` still lets the body land.
+ */
+const SLOW_BODY_DELAY_MS = 3000
+
+/**
+ * The body timeout a case installs, in milliseconds as a string. Above undici's 1000 ms timer
+ * resolution deliberately: undici routes a bound at or below that through a coarse wheel that does not
+ * enforce it, so a smaller value would not abort and the test would prove nothing.
+ */
+const BODY_TIMEOUT_MS = '1100'
 
 /**
  * The target for every assertion about a tunnelled hop. It is deliberately not loopback: no policy
@@ -39,6 +55,15 @@ beforeAll(async () => {
   proxy = createServer((request, response) => {
     proxied.push(`${request.method} ${request.url}`)
     response.writeHead(200, { 'content-type': 'text/plain' })
+    // A `/slow` target flushes headers then withholds the body so a proxied request exercises the
+    // dispatcher's body timeout (not its headers timeout); the timer is cleared if the client aborts,
+    // so a timed-out request writes no dead socket.
+    if ((request.url ?? '').endsWith('/slow')) {
+      response.flushHeaders()
+      const timer = setTimeout(() => { response.end('VIA-PROXY-SLOW') }, SLOW_BODY_DELAY_MS)
+      response.on('close', () => { clearTimeout(timer) })
+      return
+    }
     response.end('VIA-PROXY')
   })
   proxy.on('connect', (request, socket) => {
@@ -46,13 +71,22 @@ beforeAll(async () => {
     socket.end()
   })
   origin = createServer((_request, response) => { response.end('DIRECT') })
-  const [proxyAddress, originAddress] = await Promise.all([listen(proxy), listen(origin)])
+  // Headers immediately, body after a delay: the shape of a provider whose long silent prefill is what
+  // undici's default 300 s body timeout aborts client-side.
+  slow = createServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'text/plain' })
+    response.flushHeaders()
+    const timer = setTimeout(() => { response.end('SLOW') }, SLOW_BODY_DELAY_MS)
+    response.on('close', () => { clearTimeout(timer) })
+  })
+  const [proxyAddress, originAddress, slowAddress] = await Promise.all([listen(proxy), listen(origin), listen(slow)])
   proxyUrl = `http://127.0.0.1:${String(proxyAddress.port)}`
   originUrl = `http://127.0.0.1:${String(originAddress.port)}/probe`
+  slowUrl = `http://127.0.0.1:${String(slowAddress.port)}/slow`
 })
 
 afterAll(async () => {
-  await Promise.all([close(proxy), close(origin)])
+  await Promise.all([close(proxy), close(origin), close(slow)])
 })
 
 afterEach(() => {
@@ -200,6 +234,65 @@ describe('installProxyFromEnvironment', () => {
       // The same policy still tunnels http, so the empty expectation above is not vacuous.
       await expect((await fetch(proxyTarget)).text()).resolves.toBe('VIA-PROXY')
       expect(proxied).toEqual([`GET ${proxyTarget}`])
+    } finally {
+      await dispose()
+    }
+  })
+})
+
+describe('the global dispatcher body timeout', () => {
+  it('arms undici body timeout with no proxy, so a stalled response body aborts', async () => {
+    const before = getGlobalDispatcher()
+    // A configured timeout is the one reason this process owns the global dispatcher with no proxy:
+    // it must actually replace it, while route resolution still reports every URL direct.
+    const { dispose } = await install(env({ DSH_HTTP_BODY_TIMEOUT_MS: BODY_TIMEOUT_MS }))
+    try {
+      expect(getGlobalDispatcher()).not.toBe(before)
+      expect(proxyRouteFor(new URL(slowUrl))).toEqual({ proxied: false })
+      // Headers arrive at once, so `fetch` resolves; the bound fires while the withheld body is read —
+      // reading it is what surfaces the abort, exactly as the SSE consumer of a silent prefill does.
+      const response = await fetch(slowUrl)
+      const error = await response.text().then(() => undefined, (reason: unknown) => reason)
+      expect((error as { cause?: { code?: string } }).cause?.code).toBe('UND_ERR_BODY_TIMEOUT')
+    } finally {
+      await dispose()
+    }
+    // Disposal restores exactly the dispatcher that was global before, so no bound outlives the install.
+    expect(getGlobalDispatcher()).toBe(before)
+  })
+
+  it('treats 0 as no bound, so a stalled response body the finite case aborts instead survives', async () => {
+    const { dispose } = await install(env({ DSH_HTTP_BODY_TIMEOUT_MS: '0' }))
+    try {
+      // The same origin whose withheld body the finite bound aborts above resolves here: 0 removes the
+      // bound rather than falling back to undici's default.
+      await expect((await fetch(slowUrl)).text()).resolves.toBe('SLOW')
+    } finally {
+      await dispose()
+    }
+  })
+
+  it('arms the bound on the proxied path too, not only on direct connections', async () => {
+    const { dispose } = await install(env({ HTTP_PROXY: proxyUrl, DSH_HTTP_BODY_TIMEOUT_MS: BODY_TIMEOUT_MS }))
+    try {
+      const response = await fetch('http://origin.test/slow')
+      const error = await response.text().then(() => undefined, (reason: unknown) => reason)
+      expect((error as { cause?: { code?: string } }).cause?.code).toBe('UND_ERR_BODY_TIMEOUT')
+      // The request did reach the proxy, so the abort is the ProxyAgent honouring the bound, not a miss.
+      expect(proxied).toContain('GET http://origin.test/slow')
+    } finally {
+      await dispose()
+    }
+  })
+
+  it('reports a value that is not milliseconds and leaves undici default in place', async () => {
+    const before = getGlobalDispatcher()
+    const { dispose, reported } = await install(env({ DSH_HTTP_BODY_TIMEOUT_MS: 'soon' }))
+    try {
+      expect(reported).toHaveLength(1)
+      expect(reported[0]).toContain('DSH_HTTP_BODY_TIMEOUT_MS')
+      // An unusable value must not make this process own the dispatcher: the default 300 s stays.
+      expect(getGlobalDispatcher()).toBe(before)
     } finally {
       await dispose()
     }
