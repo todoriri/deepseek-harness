@@ -173,3 +173,10 @@ Docs accompany every code change: update affected README and JSDoc contracts tog
 ## Vendoring policy
 
 `vendor/` packages are pinned source copies (manifest with upstream SHAs in [vendor/README.md](vendor/README.md)). Update via the sync procedure there; re-apply or retire the logged local modifications; rerun `pnpm run test && pnpm run build`.
+
+## Subagent delegation
+
+- **Delegate exploration to subagents.** Read-heavy sweeps ("find every X", "trace
+  how Y mutates") go to a read-only Explore subagent that returns the conclusion.
+- **Delegation is bounded:** at most 2 concurrent subagents; a subagent works
+  inline and never delegates again.
