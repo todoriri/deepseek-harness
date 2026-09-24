@@ -25,7 +25,7 @@ Use this package to apply one outbound HTTP proxy policy to Harness requests tha
 <a id="use-this-package"></a>
 ## Use this package
 
-Nothing to mount, and nothing to configure. The `dsh` launcher resolves and installs the policy for every profile before the first plugin loads, so a user who exports `HTTPS_PROXY` is proxied everywhere. This is a library rather than a plugin because transport policy has one answer per process: there is no second implementation to swap and no scope narrower than the process to give one.
+Nothing to mount. The `dsh` launcher resolves and installs the policy for every profile before the first plugin loads, so a user who exports `HTTPS_PROXY` is proxied everywhere. One optional environment variable, `DSH_HTTP_BODY_TIMEOUT_MS`, bounds a slow response ([Bounding a slow response](#bounding-a-slow-response)); otherwise there is nothing to configure. This is a library rather than a plugin because transport policy has one answer per process: there is no second implementation to swap and no scope narrower than the process to give one.
 
 ### Writing a new outbound call
 
@@ -50,6 +50,14 @@ That gate cannot see inside an SDK, so each outbound call site carries an `egres
 `http_proxy`, `https_proxy`, `no_proxy`, and `all_proxy`, lowercase first and uppercase as the fallback, with a blank value treated as unset. `ALL_PROXY` backs both schemes, and HTTPS falls back to the HTTP proxy last — neither Node nor undici derives the first of these on its own. Values come from the launcher's snapshot: an exported variable first, then `$DSH_HOME/.env`. A project's own `.env` cannot carry these names — that file arrives with a clone, and the launcher refuses to start rather than let a repository choose where the harness sends its traffic.
 
 Loopback is always bypassed — `localhost`, the whole `127.0.0.0/8` range, `::1`, `0.0.0.0`, and the IPv4-mapped spellings of those. The harness's own Web UI, Connection transport, and every local test server would otherwise route through the proxy and loop. The published bypass list names only the four literal entries an environment reader can match; `proxyForUrl` recognises the range itself, because a list entry cannot express one.
+
+### Bounding a slow response
+
+`DSH_HTTP_BODY_TIMEOUT_MS` arms undici's `bodyTimeout` and `headersTimeout` on the installed dispatcher, in milliseconds. Node's built-in `fetch` runs on undici, whose default for both is 300000 ms, so a provider that streams response headers at once then withholds the body until a long prefill finishes is aborted client-side at five minutes — a bare `terminated` no adapter idle watchdog can pre-empt, because the abort comes from the transport, not from silence the adapter observes.
+
+Unset leaves undici's default and installs nothing new, so a process with no proxy keeps undici's own global dispatcher. `0` removes the bound: a request then waits indefinitely for body progress. A positive value applies to every request this process routes, direct or proxied — undici's `ProxyAgent` drops the bound on its forward pool, so it is re-applied there. A value that is not a count of milliseconds is reported and skipped, and a value at or below undici's 1000 ms timer resolution is not enforced.
+
+Prefer a finite bound over `0`. `0` also removes the only timeout MCP-over-HTTP, web search, and web fetch have; a streaming LLM's own idle watchdog is separate and covers only that stream.
 
 ### Failures
 
@@ -110,6 +118,7 @@ These limits define when the package is a poor fit. They are current package con
 - **Telemetry is direct by design** — the OTLP exporter posts through `node:http`, which no global dispatcher reaches. Routing it would need either an `http.Agent` whose `proxyEnv` option post-dates the lowest supported Node, or the SDK's `fetch` transport, which has no compression while the shipped profile enables gzip. Telemetry is the one channel whose loss costs the user nothing, so it stays where it was; `DSH_TELEMETRY_MODE=DISABLED` turns it off.
 - **Model-authored programs receive no proxy settings** — the Node ptc-runtime process and workflow worker do not inherit a proxy URL that may contain `user:password`. Their direct requests need their own configuration and remain subject to the execution sandbox.
 - **The regression gate sees source, not dependencies** — `verify-no-bare-dispatcher` parses `packages/*/*/src` and `apps/*/src`; tests, scripts, and the internals of a third-party SDK are outside it. That is why every outbound call site also carries an `egress.spec.ts`.
+- **The body timeout reaches only in-process requests and is off by default** — `DSH_HTTP_BODY_TIMEOUT_MS` arms undici's `bodyTimeout`/`headersTimeout` on the global dispatcher, so it covers exactly what the proxy does — a plain `fetch()` in this process — and not a worker thread's own dispatcher, `node:http` telemetry, or a spawned child, each of which would need its own bound. It is unset by default, leaving undici's 300 s, and a value at or below undici's 1000 ms timer resolution is not enforced.
 
 <a id="dev-note"></a>
 ### Dev Note

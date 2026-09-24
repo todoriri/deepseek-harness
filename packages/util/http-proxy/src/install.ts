@@ -129,6 +129,69 @@ function writeProxyEnv(values: Readonly<Record<string, string | undefined>>): ()
 }
 
 /**
+ * The launch-environment variable that arms undici's body and headers timeouts on the global
+ * dispatcher, in milliseconds. Unset leaves undici's defaults; `0` removes the bound; a positive
+ * value applies it to every outbound request this process routes.
+ */
+const BODY_TIMEOUT_ENV = 'DSH_HTTP_BODY_TIMEOUT_MS'
+
+/**
+ * The body and headers timeout to arm on the global dispatcher. One value drives both: a streaming
+ * provider sends response headers immediately and the silent gap is in the body, so `headersTimeout`
+ * only bounds a provider that also delays its headers.
+ */
+interface DispatcherTimeout {
+  /** Milliseconds undici waits for body or header progress before aborting a request; `0` means no bound. */
+  readonly bodyTimeoutMs: number
+}
+
+/**
+ * Resolve the global dispatcher's body timeout from the launch environment.
+ *
+ * Node's built-in `fetch` runs on undici, whose `bodyTimeout` and `headersTimeout` default to
+ * 300_000 ms. A provider that streams response headers at once then withholds the body until a long
+ * prefill finishes is aborted client-side at that default — a bare `terminated` no adapter idle
+ * watchdog can pre-empt, because the abort comes from the transport, not from silence the adapter
+ * observes. This knob hands that bound to the operator.
+ *
+ * An absent or blank value keeps undici's default and installs nothing new. `0` is a deliberate "no
+ * bound": every outbound request then waits indefinitely for body progress, so a long silent prefill
+ * survives. A value that is not a count of milliseconds is reported and skipped, leaving the default,
+ * because it reads as a typo rather than an intent to change transport.
+ *
+ * @param env - the launch environment snapshot, read the same way the proxy policy is.
+ * @param report - receives one message when the value is present but unusable.
+ * @returns the resolved timeout, or `undefined` to leave undici's default in place.
+ */
+function resolveDispatcherTimeout(
+  env: EnvLookup,
+  report: (message: string) => void,
+): DispatcherTimeout | undefined {
+  const raw = env.get(BODY_TIMEOUT_ENV)?.value.trim()
+  if (raw === undefined || raw === '') return undefined
+  if (!/^\d+$/.test(raw)) {
+    report(`${BODY_TIMEOUT_ENV} is not a non-negative integer of milliseconds; leaving undici's default body timeout in place`)
+    return undefined
+  }
+  return { bodyTimeoutMs: Number(raw) }
+}
+
+/**
+ * The undici client options one resolved timeout contributes, applied to the Agent and every
+ * per-origin client its factory builds. An absent timeout contributes nothing, so undici's defaults
+ * stand and the dispatcher is the one this package installed before the knob existed.
+ *
+ * @param timeout - the resolved timeout, or `undefined` for undici's defaults.
+ * @returns the `bodyTimeout` and `headersTimeout` options, or an empty object.
+ */
+function dispatcherTimeoutOptions(
+  timeout: DispatcherTimeout | undefined,
+): { bodyTimeout?: number; headersTimeout?: number } {
+  if (timeout === undefined) return {}
+  return { bodyTimeout: timeout.bodyTimeoutMs, headersTimeout: timeout.bodyTimeoutMs }
+}
+
+/**
  * Build the global dispatcher for one policy.
  *
  * Routing runs through {@link proxyForUrl} per origin, so `fetch` and every caller that asks where a
@@ -138,20 +201,38 @@ function writeProxyEnv(values: Readonly<Record<string, string | undefined>>): ()
  * the user named for it — the route and the diagnostic would then disagree.
  *
  * @param policy - the policy to route by; it must proxy at least one scheme.
+ * @param timeout - the body timeout to arm on every per-origin client, or `undefined` for undici's defaults.
  * @returns the dispatcher to install, owning every per-origin agent its factory created.
  */
-async function createPolicyDispatcher(policy: ProxyPolicy): Promise<Dispatcher> {
+async function createPolicyDispatcher(
+  policy: ProxyPolicy,
+  timeout: DispatcherTimeout | undefined,
+): Promise<Dispatcher> {
   const { Agent, Pool, ProxyAgent } = await import('undici')
+  const timeouts = dispatcherTimeoutOptions(timeout)
+  // A per-origin pool that carries the bound whatever options undici hands the factory. It always
+  // builds a `Pool`, never a bare `Client`: undici's own default factory reaches for a `Client` only
+  // at `connections: 1`, an option this dispatcher never carries.
+  const poolWithTimeout = (poolOrigin: URL | string, poolOptions: object): Pool =>
+    new Pool(poolOrigin, { ...(poolOptions as Pool.Options), ...timeouts })
   return new Agent({
+    ...timeouts,
     factory(origin, options) {
       // undici declares this parameter as `Object`, discarding the pool options it actually passes.
-      const passed = options as Pool.Options
+      // The Agent forwards its own options here, so the timeout already rides along; merging it again
+      // makes that independent of which undici version built these options.
+      const passed = { ...(options as Pool.Options), ...timeouts }
       const proxy = proxyForUrl(policy, new URL(origin.toString()))
-      if (proxy !== undefined) return new ProxyAgent({ ...passed, uri: proxy })
-      // What undici's own default factory builds for these options, which `factory` replaces
-      // wholesale. It reaches for a bare `Client` only at `connections: 1`, an option this
-      // dispatcher never carries: it is constructed with undici's defaults.
-      return new Pool(origin, passed)
+      if (proxy !== undefined) {
+        // undici's `ProxyAgent` builds its inner forward pool with only the connector, dropping the
+        // client timeouts passed to it, so a bound is re-applied through its own factory or the
+        // proxied path keeps undici's 300 s default — the yield gap the upstream proposal left open.
+        // The factory is overridden only when a bound exists, so the unset path stays undici's own.
+        return timeout === undefined
+          ? new ProxyAgent({ ...passed, uri: proxy })
+          : new ProxyAgent({ ...passed, uri: proxy, factory: poolWithTimeout })
+      }
+      return poolWithTimeout(origin, passed)
     },
   })
 }
@@ -161,7 +242,9 @@ async function createPolicyDispatcher(policy: ProxyPolicy): Promise<Dispatcher> 
  *
  * Installing replaces undici's global dispatcher, which is what Node's built-in `fetch` resolves, so
  * every caller that issues a plain `fetch()` is covered without knowing this package exists. A policy
- * that proxies nothing installs a direct dispatcher and leaves the environment untouched.
+ * that proxies nothing installs a direct dispatcher and leaves the environment untouched — except
+ * that a configured body timeout is armed on that direct dispatcher too, since undici's default
+ * global Agent carries none.
  *
  * A worker thread has its own `globalThis` and so its own dispatcher; installing here does not
  * reach it. No worker installs one today: both this repository ships — the workflow engine and the
@@ -169,9 +252,13 @@ async function createPolicyDispatcher(policy: ProxyPolicy): Promise<Dispatcher> 
  * credentials. A worker that needs the policy has to be handed one explicitly and install it itself.
  *
  * @param policy - the resolved policy to install.
+ * @param timeout - the body timeout to arm on the dispatcher, or `undefined` for undici's defaults.
  * @returns a disposer restoring the previous dispatcher, policy, and environment, then closing the agent.
  */
-async function installGlobalProxy(policy: ProxyPolicy): Promise<() => Promise<void>> {
+async function installGlobalProxy(
+  policy: ProxyPolicy,
+  timeout: DispatcherTimeout | undefined,
+): Promise<() => Promise<void>> {
   const previousPolicy = active
   if (policy.source === 'none') {
     // A direct policy mounted over an installed one must actually stop proxying. Recording the policy
@@ -179,10 +266,32 @@ async function installGlobalProxy(policy: ProxyPolicy): Promise<() => Promise<vo
     // tunnelling while `proxyForUrl()` reported a direct connection — and `mode: 'off'` would be a
     // silent no-op. With nothing installed there is nothing to displace.
     if (previousPolicy === undefined) {
+      // Absent a configured body timeout this installs nothing, exactly as before, so a process with
+      // no proxy keeps undici's default global dispatcher. A configured timeout is the one reason to
+      // own the dispatcher here even with no proxy: undici's default Agent arms no body timeout, so a
+      // provider that streams headers immediately then withholds the body past undici's 300 s default
+      // (a long silent prefill) is aborted client-side unless this process installs an Agent that
+      // carries the bound.
+      if (timeout === undefined) {
+        active = policy
+        return () => {
+          active = previousPolicy
+          return Promise.resolve()
+        }
+      }
+      const previousInstalled = installed
+      const undici = await import('undici')
+      const previous = undici.getGlobalDispatcher()
+      const direct = new undici.Agent(dispatcherTimeoutOptions(timeout))
+      undici.setGlobalDispatcher(direct)
       active = policy
-      return () => {
+      // A direct policy proxies nothing, so every route stays direct and `installed` carries no agent.
+      installed = undefined
+      return async () => {
+        undici.setGlobalDispatcher(previous)
         active = previousPolicy
-        return Promise.resolve()
+        installed = previousInstalled
+        await direct.close()
       }
     }
     const previousInstalled = installed
@@ -193,7 +302,7 @@ async function installGlobalProxy(policy: ProxyPolicy): Promise<() => Promise<vo
     const restoreEnv = inheritedProxyEnv === undefined ? undefined : writeProxyEnv(inheritedProxyEnv)
     const undici = await import('undici')
     const previous = undici.getGlobalDispatcher()
-    const direct = new undici.Agent()
+    const direct = new undici.Agent(dispatcherTimeoutOptions(timeout))
     undici.setGlobalDispatcher(direct)
     active = policy
     installed = undefined
@@ -209,7 +318,7 @@ async function installGlobalProxy(policy: ProxyPolicy): Promise<() => Promise<vo
   const { getGlobalDispatcher, setGlobalDispatcher } = await import('undici')
   const previousDispatcher = getGlobalDispatcher()
   const previousInstalled = installed
-  const agent = await createPolicyDispatcher(policy)
+  const agent = await createPolicyDispatcher(policy, timeout)
   setGlobalDispatcher(agent)
   active = policy
   installed = agent
@@ -299,7 +408,8 @@ export async function installProxyFromEnvironment(
 ): Promise<() => Promise<void>> {
   const { policy, diagnostics } = resolveProxyPolicy(env)
   for (const diagnostic of diagnostics) report(diagnostic.message)
-  return await installGlobalProxy(policy)
+  const timeout = resolveDispatcherTimeout(env, report)
+  return await installGlobalProxy(policy, timeout)
 }
 
 /**
