@@ -169,6 +169,30 @@ function resolveReasoningLevel(
 }
 
 /**
+ * Resolve the reasoning level one request asks for.
+ *
+ * An auxiliary session-title request never reasons, outranking the caller's
+ * effort and the route's configured default: a provider that thinks before
+ * answering spends the title's small output budget on reasoning and returns no
+ * title text, which the title policy rejects. `off` skips level validation
+ * deliberately, because a route may declare no `off` level while its model still
+ * accepts the omitted reasoning option that {@link profileOptions} sends for it.
+ * The dsh-llm-deepseek adapter keeps thinking disabled for the same purpose.
+ * @param model - the resolved model descriptor.
+ * @param options - the request, carrying its purpose and any explicit effort.
+ * @param profile - the resolved route, carrying its configured default effort.
+ * @returns the level to request, or undefined when the request names none.
+ */
+function requestReasoningLevel(
+  model: Model<Api>,
+  options: GenerateOptions,
+  profile: ResolvedPiAiProviderProfile,
+): ModelThinkingLevel | undefined {
+  if (options.purpose === 'session-title') return 'off'
+  return resolveReasoningLevel(model, options.reasoningEffort ?? profile.reasoning)
+}
+
+/**
  * Selectable reasoning efforts for one model, or nothing at all.
  *
  * A model that carries no reasoning metadata — every hand-declared one, and
@@ -341,10 +365,7 @@ export class PiAiAdapter extends LlmAdapter {
     // the one it started with and the next call picks up the new one.
     const profile = this.profileOf(snapshot, options.provider)
     const model = this.modelOf(snapshot, options.provider, options.model)
-    const reasoning = resolveReasoningLevel(
-      model,
-      options.reasoningEffort ?? profile.reasoning,
-    )
+    const reasoning = requestReasoningLevel(model, options, profile)
     const apiKey = await this.config.resolveApiKey(options.provider, profile)
 
     const consumer = new AbortController()

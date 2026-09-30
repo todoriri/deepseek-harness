@@ -183,6 +183,52 @@ describe('PiAiAdapter provider routing', () => {
     expect(server.requests).toHaveLength(2)
   })
 
+  it('never asks for reasoning on an auxiliary session-title request', async () => {
+    const server = await mockServer([{ events: textEvents }, { events: textEvents }])
+    const ctx = await harness(server.url, { reasoning: 'max' })
+
+    await assemble(ctx, {
+      model: 'deepseek-v4-pro',
+      messages: [],
+      purpose: 'session-title',
+    })
+    expect(server.requests[0]).toMatchObject({ thinking: { type: 'disabled' } })
+    expect(server.requests[0]).not.toHaveProperty('reasoning_effort')
+
+    // The purpose outranks an explicit effort too, matching the DeepSeek adapter.
+    await assemble(ctx, {
+      model: 'deepseek-v4-pro',
+      reasoningEffort: ReasoningEffortId('max'),
+      messages: [],
+      purpose: 'session-title',
+    })
+    expect(server.requests[1]).toMatchObject({ thinking: { type: 'disabled' } })
+    expect(server.requests[1]).not.toHaveProperty('reasoning_effort')
+  })
+
+  it('sends the template thinking disable for an auxiliary session-title request', async () => {
+    const server = await mockServer([{ events: textEvents }, { events: textEvents }])
+    const ctx = await harness(server.url, { compat: { thinkingFormat: 'qwen-chat-template' } })
+
+    await assemble(ctx, {
+      model: 'deepseek-v4-pro',
+      reasoningEffort: ReasoningEffortId('high'),
+      messages: [],
+    })
+    expect(server.requests[0]).toMatchObject({
+      chat_template_kwargs: { enable_thinking: true, preserve_thinking: true },
+    })
+
+    await assemble(ctx, {
+      model: 'deepseek-v4-pro',
+      messages: [],
+      purpose: 'session-title',
+    })
+    expect(server.requests[1]).toMatchObject({
+      chat_template_kwargs: { enable_thinking: false, preserve_thinking: true },
+    })
+  })
+
   it('preserves omitted profile options when constructing the adapter directly', async () => {
     const server = await mockServer([{ events: textEvents }])
     const ctx = new Context()

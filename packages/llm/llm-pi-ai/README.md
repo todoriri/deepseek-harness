@@ -104,6 +104,8 @@ A profile's `models` list replaces the route's installed catalog rather than ext
 
 For self-hosted Chat Completions endpoints, `thinkingTokenBudgetField` selects the reasoning-budget parameter, and `vllmPriority` sets an integer scheduler priority when the server enables priority scheduling. Template arguments accept `$var: thinking.budget`. `openai-responses` gateways can set `supportsMaxOutputTokens: false` to omit `max_output_tokens`; Azure and Codex transports ignore this shared compatibility field. These controls are opt-in; catalog-owned Anthropic effort and fallback capabilities are not configurable switches.
 
+Auxiliary session-title generation never asks for reasoning: that purpose outranks both the caller's effort and the route's default, because a thinking-first provider would spend the title's small output budget on reasoning instead of title text. The request carries whatever the route's thinking format expresses for no reasoning — `thinking: { type: 'disabled' }`, `enable_thinking: false`, or no parameter — matching `dsh-llm-deepseek`'s treatment of the same purpose ([rationale](../../../.agents/notes/implemented/bug-fix/2026-09-19-pi-ai-session-title-reasoning.md)).
+
 ### Change configuration at runtime
 
 Each operation captures the current `providers` Config reference. New or changed provider profiles are validated before form persistence; unchanged catalog failures remain editable. Route-set or retry-policy changes update registration atomically, preserving previous routes if another adapter owns a requested route.
