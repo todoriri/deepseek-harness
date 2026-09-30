@@ -185,7 +185,5 @@ Docs accompany every code change: update affected README and JSDoc contracts tog
 
 ## Subagent delegation
 
-- **Delegate exploration to subagents.** Read-heavy sweeps ("find every X", "trace
-  how Y mutates") go to a read-only Explore subagent that returns the conclusion.
-- **Delegation is bounded:** at most 2 concurrent subagents; a subagent works
-  inline and never delegates again.
+- **Delegate exploration to subagents.** Read-heavy sweeps ("find every X", "trace how Y mutates") go to a read-only Explore subagent that returns the conclusion.
+- **Delegation is bounded:** at most 2 concurrent subagents; a subagent works inline and never delegates again.

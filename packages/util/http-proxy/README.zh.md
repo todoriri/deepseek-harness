@@ -51,6 +51,7 @@ kind: "package-reference"
 
 loopback 始终被绕过——`localhost`、整个 `127.0.0.0/8` 段、`::1`、`0.0.0.0`，以及它们的 IPv4 映射写法。否则 Harness 自己的 Web UI、Connection 传输以及每一个本地测试服务器都会经由代理并形成回环。发布出去的绕过列表只包含读取环境的消费者能匹配的四个字面量条目；`proxyForUrl` 自行识别整个网段，因为列表条目无法表达一个范围。
 
+<a id="bounding-a-slow-response"></a>
 ### 限定慢响应
 
 `DSH_HTTP_BODY_TIMEOUT_MS` 以毫秒为单位，为已安装的 dispatcher 设置 undici 的 `bodyTimeout` 与 `headersTimeout`。Node 内置的 `fetch` 运行在 undici 之上，两者默认值均为 300000 ms，因此当 provider 立即返回响应头、却要等长时间 prefill 结束才发送响应体时，请求会在五分钟时被客户端中止——只留下一个裸的 `terminated`，任何适配器空闲看门狗都无法抢先处理，因为中止来自传输层，而不是适配器观察到的静默。
