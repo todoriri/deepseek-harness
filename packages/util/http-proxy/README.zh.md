@@ -25,7 +25,7 @@ kind: "package-reference"
 <a id="use-this-package"></a>
 ## 使用本包
 
-无需挂载，也无需配置。`dsh` 启动器会在第一个插件加载之前，为每个 profile 解析并安装策略，因此导出了 `HTTPS_PROXY` 的用户在所有位置都会走代理。本包是库而非插件，因为传输策略每个进程只有一个答案：没有第二个实现可替换，也没有比进程更窄的作用域可赋予。
+无需挂载。`dsh` 启动器会在第一个插件加载之前，为每个 profile 解析并安装策略，因此导出了 `HTTPS_PROXY` 的用户在所有位置都会走代理。唯一可选的环境变量 `DSH_HTTP_BODY_TIMEOUT_MS` 用于限定慢响应（[限定慢响应](#bounding-a-slow-response)）；除此之外无需任何配置。本包是库而非插件，因为传输策略每个进程只有一个答案：没有第二个实现可替换，也没有比进程更窄的作用域可赋予。
 
 ### 编写新的出站调用
 
@@ -50,6 +50,14 @@ kind: "package-reference"
 `http_proxy`、`https_proxy`、`no_proxy` 与 `all_proxy`，小写优先、大写兜底，空值视为未设置。`ALL_PROXY` 为两种协议兜底，HTTPS 最后回退到 HTTP 代理——其中第一条 Node 与 undici 都不会自行推导。取值来自启动器的快照：先看导出的环境变量，再看 `$DSH_HOME/.env`。项目自己的 `.env` 不能携带这些名字——那个文件随 clone 一起到来，启动器宁可拒绝启动，也不让一个仓库决定 Harness 把流量发往何处。
 
 loopback 始终被绕过——`localhost`、整个 `127.0.0.0/8` 段、`::1`、`0.0.0.0`，以及它们的 IPv4 映射写法。否则 Harness 自己的 Web UI、Connection 传输以及每一个本地测试服务器都会经由代理并形成回环。发布出去的绕过列表只包含读取环境的消费者能匹配的四个字面量条目；`proxyForUrl` 自行识别整个网段，因为列表条目无法表达一个范围。
+
+### 限定慢响应
+
+`DSH_HTTP_BODY_TIMEOUT_MS` 以毫秒为单位，为已安装的 dispatcher 设置 undici 的 `bodyTimeout` 与 `headersTimeout`。Node 内置的 `fetch` 运行在 undici 之上，两者默认值均为 300000 ms，因此当 provider 立即返回响应头、却要等长时间 prefill 结束才发送响应体时，请求会在五分钟时被客户端中止——只留下一个裸的 `terminated`，任何适配器空闲看门狗都无法抢先处理，因为中止来自传输层，而不是适配器观察到的静默。
+
+未设置时保留 undici 默认值且不安装任何新对象，因此没有代理的进程仍保留 undici 自己的全局 dispatcher。`0` 取消该上限：请求会无限期等待响应体进展。正值作用于本进程路由的每一个请求，无论直连还是经代理——undici 的 `ProxyAgent` 会在其转发连接池上丢弃该上限，因此会在那里重新应用。不是毫秒计数的值会被报告并跳过；小于或等于 undici 1000 ms 定时器精度的值不会生效。
+
+优先使用有限上限而非 `0`。`0` 还会取消 MCP-over-HTTP、web search 与 web fetch 仅有的超时；流式 LLM 自己的空闲看门狗是独立的，只覆盖该流。
 
 ### 失败处理
 
@@ -110,6 +118,7 @@ loopback 始终被绕过——`localhost`、整个 `127.0.0.0/8` 段、`::1`、`
 - **遥测按设计直连**——OTLP 导出器通过 `node:http` 投递，全局 dispatcher 触及不到。要让它走代理，要么依赖 `http.Agent` 的 `proxyEnv`，而该选项晚于本项目支持的最低 Node 版本；要么改用 SDK 的 `fetch` 传输，但它没有压缩能力，而随附配置启用了 gzip。遥测是唯一一条丢失后不会让用户付出任何代价的通道，因此维持原状；`DSH_TELEMETRY_MODE=DISABLED` 可关闭它。
 - **模型编写的程序不接收代理配置**——Node ptc-runtime 进程与 workflow worker 不继承可能含有 `user:password` 的代理 URL。其直接请求需要自行配置，并继续受到执行沙箱的约束。
 - **防回归门禁只看源码，看不到依赖内部**——`verify-no-bare-dispatcher` 解析 `packages/*/*/src` 与 `apps/*/src`；测试、脚本以及第三方 SDK 的内部都在其之外。这正是每个出网点还各配一份 `egress.spec.ts` 的原因。
+- **响应体超时只作用于进程内请求，且默认关闭**——`DSH_HTTP_BODY_TIMEOUT_MS` 在全局 dispatcher 上设置 undici 的 `bodyTimeout`/`headersTimeout`，因此它覆盖的范围与代理完全相同——本进程内的普通 `fetch()`——而不包括 worker 线程自己的 dispatcher、`node:http` 遥测或 spawn 出的子进程，这些各自需要单独的上限。它默认未设置，保留 undici 的 300 s；小于或等于 undici 1000 ms 定时器精度的值不会生效。
 
 <a id="dev-note"></a>
 ### 开发备注

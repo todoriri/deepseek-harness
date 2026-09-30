@@ -2,6 +2,8 @@
 
 Status: implemented
 
+English | [中文](2026-09-20-http-proxy-body-timeout.zh.md)
+
 ## Problem
 
 Node's built-in `fetch` runs on undici, whose global dispatcher arms `bodyTimeout` and `headersTimeout` at 300000 ms. A streaming provider sends response headers immediately, then no body bytes until its prefill finishes, so a prefill longer than five minutes is aborted by the client's own transport as a bare `TypeError: terminated` (`cause` `UND_ERR_BODY_TIMEOUT`). `dsh-llm-pi-ai` flattens that to a retryable `TRANSPORT` error ([`stream.ts`](../../../../packages/llm/llm-pi-ai/src/stream.ts) discards the `cause` chain) and retries into the same wait, each retry re-sending the whole context. The adapter's `streamIdleTimeoutMs` cannot pre-empt it: that watchdog ([`config.ts`](../../../../packages/llm/llm-pi-ai/src/config.ts) `DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300000`, armed in [`adapter.ts`](../../../../packages/llm/llm-pi-ai/src/adapter.ts)) fires on stream silence, while the abort comes from the transport. This is [deepseek-ai/deepseek-harness#5673](https://github.com/deepseek-ai/deepseek-harness/discussions/5673); a local teacher whose long-context prefill exceeds five minutes is guaranteed a client-side kill-and-retry loop.

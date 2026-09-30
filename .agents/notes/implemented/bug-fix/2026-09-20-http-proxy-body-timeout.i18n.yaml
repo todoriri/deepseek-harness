@@ -1,0 +1,19 @@
+# Bilingual-pair consistency record for 2026-09-20-http-proxy-body-timeout.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-20-http-proxy-body-timeout.md
+/agent-note-http-proxy-owns-an-optional-undici-body-timeout:
+  en: b35af44fd9d2445d
+  zh: 1e248f6d911d6bd8
+/agent-note-http-proxy-owns-an-optional-undici-body-timeout/problem:
+  en: 20d56533e99c962c
+  zh: 08314fe22034cb2d
+/agent-note-http-proxy-owns-an-optional-undici-body-timeout/decision:
+  en: fe8677c124ca1d40
+  zh: d2bf71f16c45254d
+/agent-note-http-proxy-owns-an-optional-undici-body-timeout/alternatives-considered:
+  en: 02e581b4d266804b
+  zh: 53d7d92654d28b8d
+/agent-note-http-proxy-owns-an-optional-undici-body-timeout/consequences:
+  en: a68d7f589e839726
+  zh: e5bb3108632621cd
