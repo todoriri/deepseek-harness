@@ -105,6 +105,28 @@ describe.skipIf(!bwrapUsable)('sandbox-local: real bwrap confinement', () => {
     },
   )
 
+  it('hides the host UNIX SOCKETS — the docker daemon and the session bus are not reachable', async () => {
+    // review.12.10 (D85): `--ro-bind / /` still hands over every SOCKET, and `--unshare-net`
+    // does not close them. Measured 2026-10-12 inside the profile WITHOUT `--tmpfs /run`:
+    // `docker version` reached the daemon (29.8.1) and `/run/user/<uid>/bus` was visible, so
+    // `systemd-run --user` could act on the host when DBUS_SESSION_BUS_ADDRESS was inherited.
+    const workdir = await tempDir(homedir())
+    const sandbox = await provider()
+    const sockets = await runConfined(
+      sandbox,
+      'for s in /run/user/$(id -u)/bus /var/run/docker.sock; do [ -S "$s" ] && printf "VISIBLE:%s\\n" "$s"; done; echo done',
+      { mode: 'workspace-write', workspaceRoot: workdir },
+    )
+    expect(sockets.result.status).toBe(0)
+    expect(sockets.result.stdout).not.toContain('VISIBLE:')
+    // The daemon probe is the escape that matters: a user in the `docker` group is
+    // root-equivalent, so reaching the socket is reaching the host filesystem.
+    const docker = await runConfined(sandbox, 'docker version >/dev/null 2>&1; echo rc=$?', { mode: 'workspace-write', workspaceRoot: workdir })
+    expect(docker.result.stdout.trim()).toBe('rc=1')
+    const bus = await runConfined(sandbox, 'systemd-run --user --quiet -- true >/dev/null 2>&1; echo rc=$?', { mode: 'workspace-write', workspaceRoot: workdir })
+    expect(bus.result.stdout.trim()).toBe('rc=1')
+  })
+
   it('keeps descendants observable and controllable inside the private PID namespace', async () => {
     const workdir = await tempDir(homedir())
     const sandbox = await provider()
