@@ -24,12 +24,33 @@ import type { SandboxPolicy } from '@deepseek-ai/dsh-sandbox'
 const BWRAP_SOCKET_HARDENING = ['--tmpfs', '/run', '--unshare-ipc', '--new-session', '--cap-drop', 'ALL']
 
 /**
+ * Deployment-level bwrap hardening beyond the file-effect policy. The policy seam expresses file
+ * effects only; this is the operator's standing choice for every confined command, carried on the
+ * provider rather than per call. Only the bwrap runner (and an operator `runnerCommand`, which
+ * asserts bwrap compatibility) can express it; the provider refuses every other rung when a field
+ * departs from {@link DEFAULT_BWRAP_HARDENING}.
+ */
+export interface BwrapHardening {
+  /**
+   * `none` runs the command in a fresh network namespace holding only its own loopback: no host
+   * service, no LAN, no internet. The model transport runs in the harness process, outside the
+   * sandbox, so provider access is unaffected.
+   */
+  network: 'inherit' | 'none'
+}
+
+/** The hardening every profile carries without operator configuration: the host network as `--ro-bind / /` presents it. */
+export const DEFAULT_BWRAP_HARDENING: BwrapHardening = { network: 'inherit' }
+
+/**
  * Build the bwrap profile arguments for one file-effect policy.
  * @param policy - file-effect policy to express as bwrap mounts.
+ * @param hardening - the provider's standing hardening; defaults to the host network.
  * @returns profile arguments before the trailing separator and command argv.
  */
-export function bwrapProfileArgs(policy: SandboxPolicy): string[] {
+export function bwrapProfileArgs(policy: SandboxPolicy, hardening: BwrapHardening = DEFAULT_BWRAP_HARDENING): string[] {
   const args = ['--ro-bind', '/', '/', '--dev', '/dev', '--unshare-pid', '--proc', '/proc', '--die-with-parent', ...BWRAP_SOCKET_HARDENING]
+  if (hardening.network === 'none') args.push('--unshare-net')
   if (policy.mode === 'workspace-write') {
     args.push('--tmpfs', '/tmp')
     args.push('--bind', policy.workspaceRoot, policy.workspaceRoot)

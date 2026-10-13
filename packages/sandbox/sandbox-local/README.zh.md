@@ -45,12 +45,25 @@ kind: "package-reference"
 | `runnerCommand` | `[]` | 自定义 runner argv；会追加 bwrap 兼容的 profile 参数，断言完全强制执行，并跳过内置选择与探测 |
 | `runnerFailureSignatures` | `[]` | 识别自定义 runner 自身失败方言的不区分大小写 stderr 子串；与 `runnerCommand` 搭配必需 |
 | `probeTimeoutMs` | `5,000` | 每次竞争 runner 候选功能探测的超时时间 |
+| `network` | `inherit` | 每条受限命令的网络可达范围；`none` 为每条命令提供只含自身回环的全新网络命名空间（仅 bwrap） |
 
 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-sandbox-local)是每个受支持字段及其 JSDoc 的穷尽式真源。
 
 ### 受限执行与强制执行
 
 挂载提供方后，命令在你逐调用解析的模式下运行。强制执行是报告的事实，而非承诺：`full` 表示后端管辖模式承诺的每个文件操作，`partial` 表示它只管辖子集——Windows ACL 档（硬链接、读取不受限与 AppContainer ACL 边界）与较旧的 Landlock ABI 是当前的部分强制执行情形，因此需要绝对边界的消费方可以拒绝或向上暴露它们。被拒绝的文件操作通过后端的拒绝方言呈现，执行命令前失败的 runner 会报告结构化的 runner 失败签名。
+
+<a id="network-hardening"></a>
+### 网络加固
+
+`network: none` 让每条受限命令运行在只含自身回环的全新网络命名空间中：无宿主服务、无局域网、无互联网。模型传输运行在沙箱之外的 harness 进程中，因此提供方访问不受影响；在受限命令内部，它会阻止 `pnpm install`、`git fetch`、`curl` 以及到宿主服务的回环连接。当自主 agent 的 shell 必须被视为敌对时选择它：可读的凭据加上开放的网络正是外泄的组合。只有 bwrap runner 与 bwrap 兼容的 `runnerCommand` 会应用它。当选择落在 Landlock、Seatbelt 或 Windows ACL runner 上时，`confine()` 以 `SANDBOX_UNAVAILABLE` 拒绝执行并指明该 runner，而不会在网络开放的情况下运行。
+
+```yaml
+- id: sandbox
+  name: '@deepseek-ai/dsh-sandbox-local'
+  config:
+    network: none
+```
 
 ### 失败与恢复
 
@@ -72,7 +85,7 @@ kind: "package-reference"
 
 ### 平台 profile
 
-bwrap profile 组合只读宿主根目录、全新 `/dev` 与私有 PID 命名空间中的 `/proc`——命令可管理其后代，但看不到宿主进程，因此 procfs 魔法链接无法绕过挂载；`workspace-write` 另加临时的 `/tmp` 与可写工作区绑定挂载。[历史私有 PID 笔记](../../../.agents/notes/archived/bug-fix/2026-08-06-bwrap-private-pid-namespace.md)记录该边界。
+bwrap profile 组合只读宿主根目录、全新 `/dev` 与私有 PID 命名空间中的 `/proc`——命令可管理其后代，但看不到宿主进程，因此 procfs 魔法链接无法绕过挂载；`workspace-write` 另加临时的 `/tmp` 与可写工作区绑定挂载。[历史私有 PID 笔记](../../../.agents/notes/archived/bug-fix/2026-08-06-bwrap-private-pid-namespace.md)记录该边界。`network: none` 在套接字加固之后追加 `--unshare-net`，且 bwrap 探测运行的就是加固后的 profile，因此 bwrap 拒绝该标志的宿主会被判定为不可用，而不是让每条命令失败。
 
 `@deepseek-ai/node-addon-system/landlock-run` API 提供平台 launcher、功能探测与授权词汇；此提供方只做模式到授权的映射，把路径解析与探测解析保留在带版本的 binary 中。
 
@@ -133,6 +146,7 @@ Windows 档为每个工作区保留一个确定性写入 SID 和常驻 ACE，同
 - **Seatbelt 依赖已弃用的 `sandbox-exec`**——macOS 仍会提供它，但若 Apple 移除该私有策略引擎，该提供方无法替换或探测。
 - **runner 选择在提供方生命周期内缓存**——安装、移除或修复 runner 后，必须重载插件才能改变选择。
 - **`runnerCommand` 是操作方断言**——配置的自定义 runner 会跳过功能探测，并假定它诚实实现与 bwrap 兼容的 profile；如果它本身是 Bash 脚本，其解释器启动发生在该脚本施加约束之前。
+- **网络加固仅限 bwrap**——`network: none` 没有 Landlock、Seatbelt 或 Windows ACL 实现；提供方在该配置下拒绝这些 runner 而不是丢弃配置，因此一旦设置，没有可用 bwrap 的宿主将完全无法限制命令。
 
 <a id="dev-note"></a>
 ### 开发备注

@@ -1,12 +1,14 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, readlinkSync, rmSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
+import { createServer } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import type { SandboxPolicy } from '@deepseek-ai/dsh-sandbox'
 import { LocalSandboxProvider } from '@deepseek-ai/dsh-sandbox-local'
+import type { Config } from '@deepseek-ai/dsh-sandbox-local'
 import { bwrapProfileArgs } from '../src/profiles.ts'
 
 /**
@@ -20,13 +22,12 @@ import { bwrapProfileArgs } from '../src/profiles.ts'
 const probe = spawnSync('bwrap', [...bwrapProfileArgs({ mode: 'read-only', workspaceRoot: '/' }), '--', 'true'], { timeout: 5_000, stdio: 'ignore' })
 const bwrapUsable = probe.status === 0
 
-let ctx: Context | undefined
+const contexts: Context[] = []
 const tempDirs: string[] = []
 const tempFiles: string[] = []
 
 afterEach(async () => {
-  await ctx?.fiber.dispose()
-  ctx = undefined
+  for (const ctx of contexts.splice(0)) await ctx.fiber.dispose()
   await Promise.all(tempDirs.splice(0).map(dir => rm(dir, { recursive: true, force: true })))
   for (const file of tempFiles.splice(0)) rmSync(file, { force: true })
 })
@@ -37,10 +38,34 @@ async function tempDir(base: string): Promise<string> {
   return dir
 }
 
-async function provider(): Promise<LocalSandboxProvider> {
-  ctx = new Context()
-  await ctx.plugin(LocalSandboxProvider, {})
+/** A provider under `config` on a fresh Context; a test comparing profiles mounts one per profile. */
+async function provider(config: Config = {}): Promise<LocalSandboxProvider> {
+  const ctx = new Context()
+  contexts.push(ctx)
+  await ctx.plugin(LocalSandboxProvider, config)
   return ctx.sandbox as LocalSandboxProvider
+}
+
+/** A host TCP listener on an ephemeral loopback port that counts the connections it accepts. */
+async function hostListener(): Promise<{ port: number; accepted: () => number; close: () => Promise<void> }> {
+  let accepted = 0
+  const server = createServer((socket) => {
+    accepted += 1
+    socket.destroy()
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  if (address === null || typeof address === 'string') throw new Error('listener has no TCP address')
+  return {
+    port: address.port,
+    accepted: () => accepted,
+    close: () => new Promise<void>((resolve, reject) => {
+      server.close((error) => {
+        if (error === undefined) resolve()
+        else reject(error)
+      })
+    }),
+  }
 }
 
 /** Confine a shell command under `policy` and run it for real; returns the spawn result and the wrap's facts. */
@@ -125,6 +150,29 @@ describe.skipIf(!bwrapUsable)('sandbox-local: real bwrap confinement', () => {
     expect(docker.result.stdout.trim()).toBe('rc=1')
     const bus = await runConfined(sandbox, 'systemd-run --user --quiet -- true >/dev/null 2>&1; echo rc=$?', { mode: 'workspace-write', workspaceRoot: workdir })
     expect(bus.result.stdout.trim()).toBe('rc=1')
+  })
+
+  it('network "none" closes the host network: the listener the default profile reaches is unreachable', async () => {
+    // review.12.10-late finding 2: `--ro-bind / /` plus the host network namespace let a confined
+    // command POST whatever it can read. Measured 2026-10-12 on this host inside the default
+    // workspace-write profile: a TCP connect to a host listener was accepted. The control run
+    // reproduces that acceptance, so the hardened run's refusal is attributable to the profile.
+    const workdir = await tempDir(homedir())
+    const listener = await hostListener()
+    try {
+      const connect = `exec 3<>/dev/tcp/127.0.0.1/${listener.port}`
+      const open = await runConfined(await provider(), connect, { mode: 'workspace-write', workspaceRoot: workdir })
+      expect(open.result.status, open.result.stderr).toBe(0)
+      await vi.waitFor(() => { expect(listener.accepted()).toBe(1) })
+
+      const closed = await runConfined(await provider({ network: 'none' }), connect, { mode: 'workspace-write', workspaceRoot: workdir })
+      expect(closed.confined.argv).toContain('--unshare-net')
+      expect(closed.result.status).not.toBe(0)
+      expect(closed.result.stderr.toLowerCase()).toContain('connection refused')
+      expect(listener.accepted()).toBe(1)
+    } finally {
+      await listener.close()
+    }
   })
 
   it('keeps descendants observable and controllable inside the private PID namespace', async () => {

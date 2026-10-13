@@ -2581,7 +2581,7 @@ export interface Config {
 
 ## `@deepseek-ai/dsh-sandbox-local`
 
-- `source`: [`packages/sandbox/sandbox-local/src/index.ts:45`](../packages/sandbox/sandbox-local/src/index.ts)
+- `source`: [`packages/sandbox/sandbox-local/src/index.ts:46`](../packages/sandbox/sandbox-local/src/index.ts)
 
 ```ts config-catalog
 /** Plugin config. All optional — `static Config` supplies the defaults. */
@@ -2606,6 +2606,17 @@ export interface Config {
   runnerFailureSignatures?: string[]
   /** Positive timeout for each functional probe; zero would mean unbounded to Node. */
   probeTimeoutMs?: number
+  /**
+   * Network reach of every confined command. `inherit` (the default) shares the host network;
+   * `none` gives each command a fresh network namespace holding only its own loopback, so it
+   * reaches neither host services nor the LAN. The model transport runs in the harness process,
+   * outside the sandbox, so `none` does not affect provider access; it does stop `pnpm install`,
+   * `git fetch`, and `curl` inside confined commands. Only the bwrap runner and a bwrap-compatible
+   * {@link runnerCommand} apply it: when selection lands on Landlock, Seatbelt, or the Windows ACL
+   * runner, `confine()` fails closed with `SANDBOX_UNAVAILABLE` naming that runner rather than
+   * running with the network open.
+   */
+  network?: 'inherit' | 'none'
 }
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-sandbox-local -->

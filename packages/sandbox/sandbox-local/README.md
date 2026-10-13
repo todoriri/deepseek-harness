@@ -45,12 +45,24 @@ Load the sandbox service and mount the provider; the defaults below are the sele
 | `runnerCommand` | `[]` | Custom runner argv; bwrap-compatible profile arguments are appended, full enforcement is asserted, and built-in selection and probes are skipped |
 | `runnerFailureSignatures` | `[]` | Case-insensitive stderr substrings identifying the custom runner's own failure dialect; required with `runnerCommand` |
 | `probeTimeoutMs` | `5,000` | Timeout for each functional probe of a competing runner candidate |
+| `network` | `inherit` | Network reach of every confined command; `none` gives each a fresh network namespace holding only its own loopback (bwrap only) |
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-sandbox-local) is the exhaustive source for every accepted field and its JSDoc.
 
 ### Confined execution and enforcement
 
 With the provider mounted, a command runs under the mode you resolve per call. Enforcement is a reported fact, not a promise: `full` means the backend governs every promised file effect, while `partial` means it governs only a subset — the Windows ACL rung (hard-link, unconfined-read, and AppContainer-ACL boundaries) and older Landlock ABIs are the current partial cases, so a consumer that requires an absolute boundary can reject or surface them. Denied file effects surface through the backend's denial dialect, and a runner that fails before executing the command reports a structured runner-failure signature.
+
+### Network hardening
+
+`network: none` runs every confined command in a fresh network namespace holding only its own loopback: no host service, no LAN, no internet. The model transport runs in the harness process, outside the sandbox, so provider access is unaffected; inside confined commands it stops `pnpm install`, `git fetch`, `curl`, and loopback connections to host services. Choose it for an autonomous agent whose shell must be assumed hostile: readable credentials and an open network are the exfiltration pair. Only the bwrap runner and a bwrap-compatible `runnerCommand` apply it. When selection lands on Landlock, Seatbelt, or the Windows ACL runner, `confine()` fails closed with `SANDBOX_UNAVAILABLE` naming that runner rather than running with the network open.
+
+```yaml
+- id: sandbox
+  name: '@deepseek-ai/dsh-sandbox-local'
+  config:
+    network: none
+```
 
 ### Failures and recovery
 
@@ -72,7 +84,7 @@ Selection is by platform first, probes second: each platform has a runner chain 
 
 ### Platform profiles
 
-The bwrap profile combines a read-only host root, a fresh `/dev`, and `/proc` from a private PID namespace — commands manage their descendants but cannot see host processes, so procfs magic links cannot bypass the mounts; `workspace-write` adds an ephemeral `/tmp` and a writable workspace bind. The [historical private-PID note](../../../.agents/notes/archived/bug-fix/2026-08-06-bwrap-private-pid-namespace.md) records the boundary.
+The bwrap profile combines a read-only host root, a fresh `/dev`, and `/proc` from a private PID namespace — commands manage their descendants but cannot see host processes, so procfs magic links cannot bypass the mounts; `workspace-write` adds an ephemeral `/tmp` and a writable workspace bind. The [historical private-PID note](../../../.agents/notes/archived/bug-fix/2026-08-06-bwrap-private-pid-namespace.md) records the boundary. `network: none` appends `--unshare-net` after the socket hardening, and the bwrap probe runs the hardened profile, so a host whose bwrap refuses the flag reads unusable instead of failing every command.
 
 The `@deepseek-ai/node-addon-system/landlock-run` API supplies the platform launcher, functional probe, and grant vocabulary; this provider maps mode to grants only, keeping path resolution and probe parsing with the versioned binary.
 
@@ -133,6 +145,7 @@ These limits define when the provider is a poor fit or needs special operational
 - **Seatbelt depends on deprecated `sandbox-exec`** — macOS still ships it, but this provider cannot replace or probe that private policy engine if Apple removes it.
 - **Runner selection is cached for the provider lifetime** — installing, removing, or repairing a runner requires reloading the plugin before selection changes.
 - **`runnerCommand` is an operator assertion** — a configured custom runner skips functional probes and is assumed to implement the bwrap-compatible profile honestly; if it is itself a Bash script, its interpreter startup runs before that script applies confinement.
+- **Network hardening is bwrap-only** — `network: none` has no Landlock, Seatbelt, or Windows ACL implementation; the provider refuses those runners under that configuration instead of dropping it, so a host without usable bwrap cannot confine at all once it is set.
 
 <a id="dev-note"></a>
 ### Dev Note

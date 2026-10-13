@@ -39,7 +39,8 @@ import type { ConfinedArgv, ConfinedSandboxMode, RunnerFailureRule, SandboxEnfor
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { AclWriteGrant, assertTempRootOutsideWorkspace, registerAclDiagnosisSkill, tempWriteSid, workspaceWriteSid } from '@deepseek-ai/dsh-sandbox-windows-acl'
 import { assertNever } from '@deepseek-ai/dsh-util-values'
-import { bwrapProfileArgs, landlockProfileArgs, seatbeltProfileArgs } from './profiles.ts'
+import { DEFAULT_BWRAP_HARDENING, bwrapProfileArgs, landlockProfileArgs, seatbeltProfileArgs } from './profiles.ts'
+import type { BwrapHardening } from './profiles.ts'
 
 /** Plugin config. All optional — `static Config` supplies the defaults. */
 export interface Config {
@@ -63,11 +64,26 @@ export interface Config {
   runnerFailureSignatures?: string[]
   /** Positive timeout for each functional probe; zero would mean unbounded to Node. */
   probeTimeoutMs?: number
+  /**
+   * Network reach of every confined command. `inherit` (the default) shares the host network;
+   * `none` gives each command a fresh network namespace holding only its own loopback, so it
+   * reaches neither host services nor the LAN. The model transport runs in the harness process,
+   * outside the sandbox, so `none` does not affect provider access; it does stop `pnpm install`,
+   * `git fetch`, and `curl` inside confined commands. Only the bwrap runner and a bwrap-compatible
+   * {@link runnerCommand} apply it: when selection lands on Landlock, Seatbelt, or the Windows ACL
+   * runner, `confine()` fails closed with `SANDBOX_UNAVAILABLE` naming that runner rather than
+   * running with the network open.
+   */
+  network?: 'inherit' | 'none'
 }
 
-/** Probe whether `bwrap` can create the profile; the provider caches the bounded result. */
-function defaultProbeBwrap(timeoutMs: number): boolean {
-  const probe = spawnSync('bwrap', [...bwrapProfileArgs({ mode: 'read-only', workspaceRoot: '/' }), '--', 'true'], {
+/**
+ * Probe whether `bwrap` can create the profile — the one it will actually run, hardening
+ * included, so a host whose bwrap refuses a configured flag reads unusable here instead of
+ * failing every confined command later; the provider caches the bounded result.
+ */
+function defaultProbeBwrap(timeoutMs: number, hardening: BwrapHardening): boolean {
+  const probe = spawnSync('bwrap', [...bwrapProfileArgs({ mode: 'read-only', workspaceRoot: '/' }, hardening), '--', 'true'], {
     timeout: timeoutMs,
     stdio: 'ignore',
   })
@@ -188,6 +204,11 @@ const STATIC_ENFORCEMENT: Record<SelectedRunner['runner'], SandboxEnforcement> =
   'windows-acl': 'partial',
 }
 
+/** Whether the operator departed from {@link DEFAULT_BWRAP_HARDENING}; then only bwrap may confine. */
+function hardeningConfigured(hardening: BwrapHardening): boolean {
+  return hardening.network !== DEFAULT_BWRAP_HARDENING.network
+}
+
 /**
  * A probe bound must be a positive finite number: Node treats
  * `spawnSync({ timeout: 0 })` as NO timeout, so an unvalidated 0 would
@@ -255,6 +276,7 @@ export class LocalSandboxProvider extends SandboxProvider {
     runnerCommand: z.array(z.string()).default([]),
     runnerFailureSignatures: z.array(z.string()).default([]),
     probeTimeoutMs: z.natural().default(5_000),
+    network: z.union(['inherit', 'none'] as const).default('inherit'),
   })
 
   /** Test hook (mirrors the bash executors' `internals`). */
@@ -263,8 +285,12 @@ export class LocalSandboxProvider extends SandboxProvider {
   private readonly runnerCommand: string[] | undefined
   private readonly configuredRunnerFailureSignatures: string[]
   private readonly probeTimeoutMs: number
+  /** The operator's standing bwrap hardening, applied to every wrap and to the bwrap probe. */
+  private readonly hardening: BwrapHardening
   /** Cached chain verdict; undefined until the first confined wrap needs it. */
   private selectedRunner: SelectedRunner | 'unavailable' | undefined
+  /** Why the cached verdict is `unavailable` when a usable rung was refused for the configured hardening. */
+  private unavailableDetail: string | undefined
   /**
    * Server-lifetime write grants (windows-acl rung): the STANDING
    * workspace-root grant per workspace (its ACE is the cross-session reuse
@@ -295,6 +321,7 @@ export class LocalSandboxProvider extends SandboxProvider {
     this.configuredRunnerFailureSignatures = runnerFailureSignatures
     this.probeTimeoutMs = config.probeTimeoutMs as number
     assertPositiveFinite('probeTimeoutMs', this.probeTimeoutMs)
+    this.hardening = { network: config.network as BwrapHardening['network'] }
     // An operator-supplied runner does not use the ACL backend. The registry
     // remains optional and may be mounted after this provider.
     /* v8 ignore next 3 -- Windows-only registration; the Linux coverage lane cannot take this branch */
@@ -320,14 +347,15 @@ export class LocalSandboxProvider extends SandboxProvider {
    * @param signal - cancellation before policy resolution or grant creation.
    * @returns the wrapped argv plus the selected backend's enforcement completeness, denial
    *   signatures, and structured runner-failure rules; throws the fail-closed
-   *   `SANDBOX_UNAVAILABLE` error when the platform has no usable runner.
+   *   `SANDBOX_UNAVAILABLE` error when the platform has no usable runner or its usable runner
+   *   cannot apply the configured hardening.
    */
   async confine(argv: readonly string[], policy: SandboxPolicy, signal?: AbortSignal): Promise<ConfinedArgv> {
     signal?.throwIfAborted()
     policy = { ...policy, workspaceRoot: canonicalPath(policy.workspaceRoot) }
     if (this.runnerCommand !== undefined) {
       return Promise.resolve<ConfinedArgv>({
-        argv: [...this.runnerCommand, ...bwrapProfileArgs(policy), '--', ...argv],
+        argv: [...this.runnerCommand, ...bwrapProfileArgs(policy, this.hardening), '--', ...argv],
         enforcement: 'full',
         denialSignatures: DENIAL_SIGNATURES.runnerCommand,
         runnerFailureRules: [{ fatalSignatures: this.configuredRunnerFailureSignatures }],
@@ -346,7 +374,7 @@ export class LocalSandboxProvider extends SandboxProvider {
   /** The selected rung's runner invocation (program + profile arguments) for one policy. */
   private runnerArgv(runner: SelectedRunner['runner'], policy: SandboxPolicy): string[] {
     switch (runner) {
-      case 'bwrap': return ['bwrap', ...bwrapProfileArgs(policy)]
+      case 'bwrap': return ['bwrap', ...bwrapProfileArgs(policy, this.hardening)]
       case 'landlock': return [this.landlockLauncher(), ...landlockProfileArgs(policy)]
       case 'seatbelt': return [this.seatbeltExec(), ...seatbeltProfileArgs(policy)]
       case 'windows-acl': return this.windowsAclRunnerArgv(policy)
@@ -498,11 +526,12 @@ export class LocalSandboxProvider extends SandboxProvider {
    * lifetime: this platform's chain ({@link PLATFORM_CHAINS}), its sole
    * candidate selected directly, multiple candidates arbitrated by
    * functional probes in chain order. Fail closed when the platform has no
-   * chain or no candidate passes — the command never runs.
+   * chain, no candidate passes, or the usable candidate cannot apply the
+   * configured hardening — the command never runs.
    */
   private selectRunner(mode: ConfinedSandboxMode): SelectedRunner {
     this.selectedRunner ??= this.chainVerdict()
-    if (this.selectedRunner === 'unavailable') throw new SandboxUnavailableError(mode)
+    if (this.selectedRunner === 'unavailable') throw new SandboxUnavailableError(mode, this.unavailableDetail)
     return this.selectedRunner
   }
 
@@ -512,11 +541,22 @@ export class LocalSandboxProvider extends SandboxProvider {
     const [first, ...rest] = chain
     if (first === undefined) return 'unavailable'
     // A sole candidate needs no arbitration; its execution-time refusal still fails closed.
-    if (rest.length === 0) return { runner: first, enforcement: STATIC_ENFORCEMENT[first] }
+    if (rest.length === 0) return this.hardened({ runner: first, enforcement: STATIC_ENFORCEMENT[first] })
     for (const runner of chain) {
       const enforcement = this.probeRunner(runner)
-      if (enforcement !== 'unusable') return { runner, enforcement }
+      if (enforcement !== 'unusable') return this.hardened({ runner, enforcement })
     }
+    return 'unavailable'
+  }
+
+  /**
+   * Gate a usable rung on the configured hardening: only bwrap expresses it, so any other rung
+   * reads unavailable, with the reason recorded for the error, rather than confining with the
+   * hardening silently dropped.
+   */
+  private hardened(selected: SelectedRunner): SelectedRunner | 'unavailable' {
+    if (selected.runner === 'bwrap' || !hardeningConfigured(this.hardening)) return selected
+    this.unavailableDetail = `the usable ${selected.runner} runner cannot apply the configured hardening (network: ${JSON.stringify(this.hardening.network)}); only bwrap can`
     return 'unavailable'
   }
 
@@ -530,7 +570,7 @@ export class LocalSandboxProvider extends SandboxProvider {
     // AppContainer-ACL boundaries.
     switch (runner) {
       case 'bwrap': {
-        const probe = this.internals.probeBwrap ?? (() => defaultProbeBwrap(this.probeTimeoutMs))
+        const probe = this.internals.probeBwrap ?? (() => defaultProbeBwrap(this.probeTimeoutMs, this.hardening))
         return probe() ? 'full' : 'unusable'
       }
       case 'landlock': {

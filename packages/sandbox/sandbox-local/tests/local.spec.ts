@@ -21,9 +21,17 @@ import {
 } from '@deepseek-ai/dsh-sandbox-local'
 import type { Config } from '@deepseek-ai/dsh-sandbox-local'
 import { bwrapProfileArgs, landlockProfileArgs, seatbeltProfileArgs } from '../src/profiles.ts'
+import type { BwrapHardening } from '../src/profiles.ts'
 
 const RO: SandboxPolicy = { mode: 'read-only', workspaceRoot: '/ws' }
 const WW: SandboxPolicy = { mode: 'workspace-write', workspaceRoot: '/ws' }
+/** The operator hardening that closes the network; every other field at its default. */
+const NO_NETWORK: BwrapHardening = { network: 'none' }
+/** The bwrap arguments every profile opens with: the read-only root, fresh /dev and /proc, and the socket hardening. */
+const BWRAP_BASE = [
+  '--ro-bind', '/', '/', '--dev', '/dev', '--unshare-pid', '--proc', '/proc', '--die-with-parent',
+  '--tmpfs', '/run', '--unshare-ipc', '--new-session', '--cap-drop', 'ALL',
+]
 
 /** Every temp dir created by this file (fake launchers and runner entries), removed after each test. */
 const tempDirs: string[] = []
@@ -86,6 +94,11 @@ describe('profile dialects', () => {
       '--tmpfs', '/run', '--unshare-ipc', '--new-session', '--cap-drop', 'ALL',
       '--tmpfs', '/tmp', '--bind', '/ws', '/ws',
     ])
+  })
+
+  it('bwrap network "none": --unshare-net follows the socket hardening and precedes the mode mounts', () => {
+    expect(bwrapProfileArgs(RO, NO_NETWORK)).toEqual([...BWRAP_BASE, '--unshare-net'])
+    expect(bwrapProfileArgs(WW, NO_NETWORK)).toEqual([...BWRAP_BASE, '--unshare-net', '--tmpfs', '/tmp', '--bind', '/ws', '/ws'])
   })
 
   it('landlock read-only: readable tree plus a writable /dev/null, nothing else', () => {
@@ -171,6 +184,67 @@ describe('runnerCommand config', () => {
       )
     },
   )
+})
+
+describe('network hardening config', () => {
+  it('the default keeps the host network: the wrap is byte-identical to the unhardened profile', async () => {
+    const { sandbox } = await setup({ network: 'inherit' }, { platform: 'linux', probeBwrap: () => true })
+    expect((await sandbox.confine(['true'], WW)).argv).toEqual(['bwrap', ...bwrapProfileArgs(WW), '--', 'true'])
+  })
+
+  it('"none" reaches the bwrap wrap as --unshare-net', async () => {
+    const { sandbox } = await setup({ network: 'none' }, { platform: 'linux', probeBwrap: () => true })
+    const confined = await sandbox.confine(['true'], WW)
+    expect(confined.argv).toEqual(['bwrap', ...bwrapProfileArgs(WW, NO_NETWORK), '--', 'true'])
+    expect(confined.argv).toContain('--unshare-net')
+  })
+
+  it('a bwrap-compatible runnerCommand receives the hardened profile', async () => {
+    const { sandbox } = await setup({ runnerCommand: ['fake-runner'], runnerFailureSignatures: ['fake-runner: '], network: 'none' })
+    expect((await sandbox.confine(['true'], RO)).argv).toEqual(['fake-runner', ...bwrapProfileArgs(RO, NO_NETWORK), '--', 'true'])
+  })
+
+  it('linux: a usable Landlock rung is refused under "none" — fail closed naming the runner, never the network left open', async () => {
+    const probeBwrap = vi.fn(() => false)
+    const probeLandlock = vi.fn(() => 'full' as const)
+    const { sandbox } = await setup({ network: 'none' }, { platform: 'linux', probeBwrap, probeLandlock, landlockLauncher: fakeLauncher() })
+    const refused = sandbox.confine(['true'], WW)
+    await expect(refused).rejects.toThrow(expect.objectContaining({ name: 'SandboxUnavailableError', code: SANDBOX_UNAVAILABLE }))
+    await expect(refused).rejects.toThrow('the usable landlock runner cannot apply the configured hardening (network: "none"); only bwrap can')
+    expect(probeLandlock).toHaveBeenCalledTimes(1)
+    // The refusal is the cached verdict: no second walk, the same structured error.
+    await expect(sandbox.confine(['true'], RO)).rejects.toThrow(SandboxUnavailableError)
+    expect(probeBwrap).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['darwin', 'seatbelt'],
+    ['win32', 'windows-acl'],
+  ])('%s: the sole %s candidate is refused under "none" before any wrap is built', async (platform, runner) => {
+    const { sandbox } = await setup({ network: 'none' }, { platform })
+    const refused = sandbox.confine(['true'], RO)
+    await expect(refused).rejects.toThrow(expect.objectContaining({ code: SANDBOX_UNAVAILABLE }))
+    await expect(refused).rejects.toThrow(`the usable ${runner} runner cannot apply the configured hardening`)
+  })
+
+  it('rejects a network value outside the vocabulary at load', async () => {
+    const ctx = new Context()
+    // @ts-expect-error -- the schema, not the type, is what a cordis.yml value meets.
+    await expect(ctx.plugin(LocalSandboxProvider, { network: 'lan' })).rejects.toThrow()
+  })
+
+  it('runs the real bwrap probe with the hardened profile when none is injected (usable here or fail closed there)', async () => {
+    const { sandbox } = await setup({ network: 'none' }, { platform: 'linux' })
+    const verdict = await (async () => {
+      try {
+        return (await sandbox.confine(['true'], RO)).argv
+      } catch (error: unknown) {
+        if (error instanceof SandboxUnavailableError) return 'unavailable'
+        throw error
+      }
+    })()
+    if (verdict !== 'unavailable') expect(verdict).toContain('--unshare-net')
+  })
 })
 
 describe('the platform chains', () => {
