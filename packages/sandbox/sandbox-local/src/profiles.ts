@@ -37,24 +37,46 @@ export interface BwrapHardening {
    * sandbox, so provider access is unaffected.
    */
   network: 'inherit' | 'none'
+  /**
+   * Canonical absolute directories every confined command sees as an empty read-only directory.
+   * The intended entry is the operator's `$HOME`: an unprivileged user namespace changes no
+   * ownership, so under `--ro-bind / /` the command otherwise reads `~/.ssh`, `~/.config/gh`, and
+   * the harness credential files. The workspace root and `/tmp` stay writable beneath a mask.
+   */
+  hidePaths: readonly string[]
+  /**
+   * Canonical absolute paths beneath a {@link hidePaths} entry bound back read-only: the toolchain
+   * a command still needs from a masked home (a node prefix, `~/.local/bin`). Which paths survive
+   * is the operator's list in cordis.yml, never a constant here, because toolchain locations vary
+   * per host; the provider validates the list at load.
+   */
+  exposeReadOnly: readonly string[]
 }
 
-/** The hardening every profile carries without operator configuration: the host network as `--ro-bind / /` presents it. */
-export const DEFAULT_BWRAP_HARDENING: BwrapHardening = { network: 'inherit' }
+/** The hardening every profile carries without operator configuration: the host network and tree as `--ro-bind / /` presents them. */
+export const DEFAULT_BWRAP_HARDENING: BwrapHardening = { network: 'inherit', hidePaths: [], exposeReadOnly: [] }
 
 /**
  * Build the bwrap profile arguments for one file-effect policy.
  * @param policy - file-effect policy to express as bwrap mounts.
- * @param hardening - the provider's standing hardening; defaults to the host network.
+ * @param hardening - the provider's standing hardening; defaults to the host network and tree.
  * @returns profile arguments before the trailing separator and command argv.
  */
 export function bwrapProfileArgs(policy: SandboxPolicy, hardening: BwrapHardening = DEFAULT_BWRAP_HARDENING): string[] {
   const args = ['--ro-bind', '/', '/', '--dev', '/dev', '--unshare-pid', '--proc', '/proc', '--die-with-parent', ...BWRAP_SOCKET_HARDENING]
   if (hardening.network === 'none') args.push('--unshare-net')
+  // Mount order is the mechanism. Each mask starts as a writable tmpfs so bwrap can create the
+  // mountpoints beneath it (the exposed paths, then the workspace) and turns read-only LAST;
+  // `--remount-ro` is not recursive, so a workspace bound beneath a mask stays writable. Measured
+  // 2026-10-13 on this host: a mask remounted before its exposures fails with
+  // `bwrap: Can't mkdir <exposed>: Read-only file system`.
+  for (const path of hardening.hidePaths) args.push('--tmpfs', path)
+  for (const path of hardening.exposeReadOnly) args.push('--ro-bind', path, path)
   if (policy.mode === 'workspace-write') {
     args.push('--tmpfs', '/tmp')
     args.push('--bind', policy.workspaceRoot, policy.workspaceRoot)
   }
+  for (const path of hardening.hidePaths) args.push('--remount-ro', path)
   return args
 }
 

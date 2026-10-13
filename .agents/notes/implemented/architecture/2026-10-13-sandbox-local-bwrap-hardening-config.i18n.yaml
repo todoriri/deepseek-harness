@@ -1,0 +1,19 @@
+# Bilingual-pair consistency record for 2026-10-13-sandbox-local-bwrap-hardening-config.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-10-13-sandbox-local-bwrap-hardening-config.md
+/agent-note-bwrap-network-and-host-path-hardening-as-provider-configuration:
+  en: dd66b6c7fdde9595
+  zh: 7dbb7c522a2cd88b
+/agent-note-bwrap-network-and-host-path-hardening-as-provider-configuration/problem:
+  en: 7fc4da2a8da0b5f1
+  zh: 4bfb35a8a0df3caf
+/agent-note-bwrap-network-and-host-path-hardening-as-provider-configuration/decision:
+  en: c1cc0bdab51c32f7
+  zh: 7cc55c53913d81b6
+/agent-note-bwrap-network-and-host-path-hardening-as-provider-configuration/consequences:
+  en: 532195e19df1d64f
+  zh: d6481eecd2cd267d
+/agent-note-bwrap-network-and-host-path-hardening-as-provider-configuration/alternatives-considered:
+  en: b2308169b96530de
+  zh: 4d99026a33f97fe1

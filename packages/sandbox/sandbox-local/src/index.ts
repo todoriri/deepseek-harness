@@ -22,9 +22,9 @@
  */
 
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   LAUNCHER_BIN,
@@ -75,6 +75,21 @@ export interface Config {
    * running with the network open.
    */
   network?: 'inherit' | 'none'
+  /**
+   * Absolute host directories every confined command sees as an empty read-only directory; the
+   * operator's `$HOME` is the intended entry, since `--ro-bind / /` otherwise exposes `~/.ssh`,
+   * `~/.config/gh`, and the harness credential files to the command. Each must exist, must not be
+   * `/`, and is resolved to its canonical path at load. The workspace root and `/tmp` stay
+   * writable beneath a masked directory. Same runner support and refusal as {@link network}.
+   */
+  hidePaths?: string[]
+  /**
+   * Absolute host paths beneath a {@link hidePaths} entry bound back read-only: the toolchain a
+   * command still needs from a masked home, such as a node prefix and `~/.local/bin`. Each must
+   * exist and is resolved to its canonical path at load; a symlink's target must be listed too.
+   * Requires {@link hidePaths}; an entry beneath no mask is refused as a misconfiguration.
+   */
+  exposeReadOnly?: string[]
 }
 
 /**
@@ -206,7 +221,45 @@ const STATIC_ENFORCEMENT: Record<SelectedRunner['runner'], SandboxEnforcement> =
 
 /** Whether the operator departed from {@link DEFAULT_BWRAP_HARDENING}; then only bwrap may confine. */
 function hardeningConfigured(hardening: BwrapHardening): boolean {
-  return hardening.network !== DEFAULT_BWRAP_HARDENING.network
+  return hardening.network !== DEFAULT_BWRAP_HARDENING.network || hardening.hidePaths.length > 0
+}
+
+/** The configured departures from the defaults, for the refusal message (`exposeReadOnly` implies `hidePaths`). */
+function describeHardening(hardening: BwrapHardening): string {
+  const parts: string[] = []
+  if (hardening.network !== DEFAULT_BWRAP_HARDENING.network) parts.push(`network: ${JSON.stringify(hardening.network)}`)
+  if (hardening.hidePaths.length > 0) parts.push(`hidePaths: ${hardening.hidePaths.length}`)
+  return parts.join(', ')
+}
+
+/**
+ * Validate and canonicalize the operator's hardening at load: a misspelled or missing path fails
+ * the plugin here rather than at the first confined command, and an exposure beneath no mask (a
+ * silent no-op) is refused. Canonical paths are what bwrap mounts, matching the canonical
+ * workspace root every wrap carries.
+ */
+function resolveBwrapHardening(config: Config): BwrapHardening {
+  const hidePaths = (config.hidePaths as string[]).map((path) => {
+    if (!isAbsolute(path)) throw new Error(`sandbox-local: hidePaths entry ${JSON.stringify(path)} must be an absolute path`)
+    const canonical = canonicalPath(path)
+    if (canonical === '/') throw new Error('sandbox-local: hidePaths cannot mask "/"')
+    if (statSync(canonical, { throwIfNoEntry: false })?.isDirectory() !== true) {
+      throw new Error(`sandbox-local: hidePaths entry ${JSON.stringify(path)} is not an existing directory`)
+    }
+    return canonical
+  })
+  const exposures = config.exposeReadOnly as string[]
+  if (exposures.length > 0 && hidePaths.length === 0) throw new Error('sandbox-local: exposeReadOnly requires hidePaths')
+  const exposeReadOnly = exposures.map((path) => {
+    if (!isAbsolute(path)) throw new Error(`sandbox-local: exposeReadOnly entry ${JSON.stringify(path)} must be an absolute path`)
+    const canonical = canonicalPath(path)
+    if (!existsSync(canonical)) throw new Error(`sandbox-local: exposeReadOnly entry ${JSON.stringify(path)} does not exist`)
+    if (!hidePaths.some(hidden => canonical.startsWith(`${hidden}/`))) {
+      throw new Error(`sandbox-local: exposeReadOnly entry ${JSON.stringify(path)} lies beneath no hidePaths entry`)
+    }
+    return canonical
+  })
+  return { network: config.network as BwrapHardening['network'], hidePaths, exposeReadOnly }
 }
 
 /**
@@ -277,6 +330,8 @@ export class LocalSandboxProvider extends SandboxProvider {
     runnerFailureSignatures: z.array(z.string()).default([]),
     probeTimeoutMs: z.natural().default(5_000),
     network: z.union(['inherit', 'none'] as const).default('inherit'),
+    hidePaths: z.array(z.string()).default([]),
+    exposeReadOnly: z.array(z.string()).default([]),
   })
 
   /** Test hook (mirrors the bash executors' `internals`). */
@@ -321,7 +376,7 @@ export class LocalSandboxProvider extends SandboxProvider {
     this.configuredRunnerFailureSignatures = runnerFailureSignatures
     this.probeTimeoutMs = config.probeTimeoutMs as number
     assertPositiveFinite('probeTimeoutMs', this.probeTimeoutMs)
-    this.hardening = { network: config.network as BwrapHardening['network'] }
+    this.hardening = resolveBwrapHardening(config)
     // An operator-supplied runner does not use the ACL backend. The registry
     // remains optional and may be mounted after this provider.
     /* v8 ignore next 3 -- Windows-only registration; the Linux coverage lane cannot take this branch */
@@ -556,7 +611,7 @@ export class LocalSandboxProvider extends SandboxProvider {
    */
   private hardened(selected: SelectedRunner): SelectedRunner | 'unavailable' {
     if (selected.runner === 'bwrap' || !hardeningConfigured(this.hardening)) return selected
-    this.unavailableDetail = `the usable ${selected.runner} runner cannot apply the configured hardening (network: ${JSON.stringify(this.hardening.network)}); only bwrap can`
+    this.unavailableDetail = `the usable ${selected.runner} runner cannot apply the configured hardening (${describeHardening(this.hardening)}); only bwrap can`
     return 'unavailable'
   }
 

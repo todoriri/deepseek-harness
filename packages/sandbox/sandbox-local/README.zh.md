@@ -46,6 +46,8 @@ kind: "package-reference"
 | `runnerFailureSignatures` | `[]` | 识别自定义 runner 自身失败方言的不区分大小写 stderr 子串；与 `runnerCommand` 搭配必需 |
 | `probeTimeoutMs` | `5,000` | 每次竞争 runner 候选功能探测的超时时间 |
 | `network` | `inherit` | 每条受限命令的网络可达范围；`none` 为每条命令提供只含自身回环的全新网络命名空间（仅 bwrap） |
+| `hidePaths` | `[]` | 每条受限命令都看作空只读目录的绝对宿主目录，操作方的 `$HOME` 是预期条目（仅 bwrap） |
+| `exposeReadOnly` | `[]` | 以只读方式绑定回去的 `hidePaths` 条目之下的绝对路径，例如被遮蔽主目录下的 node 前缀；需要 `hidePaths` |
 
 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-sandbox-local)是每个受支持字段及其 JSDoc 的穷尽式真源。
 
@@ -63,6 +65,20 @@ kind: "package-reference"
   name: '@deepseek-ai/dsh-sandbox-local'
   config:
     network: none
+```
+
+<a id="host-path-hardening"></a>
+### 宿主路径加固
+
+`--ro-bind / /` 会把操作方可读的每个文件交给受限命令：非特权用户命名空间不会改变文件所有权，因此 `~/.ssh`、`~/.config/gh` 与 harness 凭据文件默认可读。`hidePaths` 把列出的每个目录替换为空的只读目录；`exposeReadOnly` 把命令仍需要的工具链以只读方式绑定回其中。工作区根目录与 `/tmp` 在被遮蔽目录之下仍可写。哪些路径得以保留由操作方的列表决定，因为工具链位置因宿主而异：符号链接的目标也必须列出，每个路径在加载时必须存在，不在任何遮蔽之下的暴露条目会被当作配置错误拒绝。与 `network` 相同的仅限 bwrap 拒绝规则同样适用。
+
+```yaml
+- id: sandbox
+  name: '@deepseek-ai/dsh-sandbox-local'
+  config:
+    network: none
+    hidePaths: ['/home/operator']
+    exposeReadOnly: ['/home/operator/.local/share/node', '/home/operator/.local/bin']
 ```
 
 ### 失败与恢复
@@ -85,7 +101,7 @@ kind: "package-reference"
 
 ### 平台 profile
 
-bwrap profile 组合只读宿主根目录、全新 `/dev` 与私有 PID 命名空间中的 `/proc`——命令可管理其后代，但看不到宿主进程，因此 procfs 魔法链接无法绕过挂载；`workspace-write` 另加临时的 `/tmp` 与可写工作区绑定挂载。[历史私有 PID 笔记](../../../.agents/notes/archived/bug-fix/2026-08-06-bwrap-private-pid-namespace.md)记录该边界。`network: none` 在套接字加固之后追加 `--unshare-net`，且 bwrap 探测运行的就是加固后的 profile，因此 bwrap 拒绝该标志的宿主会被判定为不可用，而不是让每条命令失败。
+bwrap profile 组合只读宿主根目录、全新 `/dev` 与私有 PID 命名空间中的 `/proc`——命令可管理其后代，但看不到宿主进程，因此 procfs 魔法链接无法绕过挂载；`workspace-write` 另加临时的 `/tmp` 与可写工作区绑定挂载。[历史私有 PID 笔记](../../../.agents/notes/archived/bug-fix/2026-08-06-bwrap-private-pid-namespace.md)记录该边界。`network: none` 在套接字加固之后追加 `--unshare-net`，且 bwrap 探测运行的就是加固后的 profile，因此 bwrap 拒绝该标志的宿主会被判定为不可用，而不是让每条命令失败。每个 `hidePaths` 条目先以可写 tmpfs 挂载，以便 bwrap 在其下创建挂载点（`exposeReadOnly` 绑定与工作区绑定），最后再重新挂载为只读；该重新挂载不递归，因此遮蔽之下的工作区仍可写。
 
 `@deepseek-ai/node-addon-system/landlock-run` API 提供平台 launcher、功能探测与授权词汇；此提供方只做模式到授权的映射，把路径解析与探测解析保留在带版本的 binary 中。
 
@@ -146,7 +162,7 @@ Windows 档为每个工作区保留一个确定性写入 SID 和常驻 ACE，同
 - **Seatbelt 依赖已弃用的 `sandbox-exec`**——macOS 仍会提供它，但若 Apple 移除该私有策略引擎，该提供方无法替换或探测。
 - **runner 选择在提供方生命周期内缓存**——安装、移除或修复 runner 后，必须重载插件才能改变选择。
 - **`runnerCommand` 是操作方断言**——配置的自定义 runner 会跳过功能探测，并假定它诚实实现与 bwrap 兼容的 profile；如果它本身是 Bash 脚本，其解释器启动发生在该脚本施加约束之前。
-- **网络加固仅限 bwrap**——`network: none` 没有 Landlock、Seatbelt 或 Windows ACL 实现；提供方在该配置下拒绝这些 runner 而不是丢弃配置，因此一旦设置，没有可用 bwrap 的宿主将完全无法限制命令。
+- **网络与宿主路径加固仅限 bwrap**——`network: none`、`hidePaths` 与 `exposeReadOnly` 没有 Landlock、Seatbelt 或 Windows ACL 实现；提供方在该配置下拒绝这些 runner 而不是丢弃配置，因此一旦设置，没有可用 bwrap 的宿主将完全无法限制命令。
 
 <a id="dev-note"></a>
 ### 开发备注

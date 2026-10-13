@@ -8,7 +8,7 @@
  */
 
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -26,7 +26,7 @@ import type { BwrapHardening } from '../src/profiles.ts'
 const RO: SandboxPolicy = { mode: 'read-only', workspaceRoot: '/ws' }
 const WW: SandboxPolicy = { mode: 'workspace-write', workspaceRoot: '/ws' }
 /** The operator hardening that closes the network; every other field at its default. */
-const NO_NETWORK: BwrapHardening = { network: 'none' }
+const NO_NETWORK: BwrapHardening = { network: 'none', hidePaths: [], exposeReadOnly: [] }
 /** The bwrap arguments every profile opens with: the read-only root, fresh /dev and /proc, and the socket hardening. */
 const BWRAP_BASE = [
   '--ro-bind', '/', '/', '--dev', '/dev', '--unshare-pid', '--proc', '/proc', '--die-with-parent',
@@ -38,6 +38,15 @@ const tempDirs: string[] = []
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
+
+/** A stand-in operator home: a real temp dir holding `keep/` (a toolchain to re-expose) and `secret.txt`. */
+function fakeHome(): string {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-fake-home-'))
+  tempDirs.push(home)
+  mkdirSync(join(home, 'keep'))
+  writeFileSync(join(home, 'secret.txt'), 'secret')
+  return realpathSync.native(home)
+}
 
 async function setup(config: Config = {}, internals: LocalSandboxProvider['internals'] = {}) {
   const ctx = new Context()
@@ -99,6 +108,17 @@ describe('profile dialects', () => {
   it('bwrap network "none": --unshare-net follows the socket hardening and precedes the mode mounts', () => {
     expect(bwrapProfileArgs(RO, NO_NETWORK)).toEqual([...BWRAP_BASE, '--unshare-net'])
     expect(bwrapProfileArgs(WW, NO_NETWORK)).toEqual([...BWRAP_BASE, '--unshare-net', '--tmpfs', '/tmp', '--bind', '/ws', '/ws'])
+  })
+
+  it('bwrap hidePaths/exposeReadOnly: masks, then exposures, then the mode mounts, and the masks turn read-only LAST', () => {
+    const masked: BwrapHardening = { network: 'none', hidePaths: ['/h'], exposeReadOnly: ['/h/keep'] }
+    expect(bwrapProfileArgs(RO, masked)).toEqual([
+      ...BWRAP_BASE, '--unshare-net', '--tmpfs', '/h', '--ro-bind', '/h/keep', '/h/keep', '--remount-ro', '/h',
+    ])
+    expect(bwrapProfileArgs(WW, masked)).toEqual([
+      ...BWRAP_BASE, '--unshare-net', '--tmpfs', '/h', '--ro-bind', '/h/keep', '/h/keep',
+      '--tmpfs', '/tmp', '--bind', '/ws', '/ws', '--remount-ro', '/h',
+    ])
   })
 
   it('landlock read-only: readable tree plus a writable /dev/null, nothing else', () => {
@@ -186,7 +206,7 @@ describe('runnerCommand config', () => {
   )
 })
 
-describe('network hardening config', () => {
+describe('network and host-path hardening config', () => {
   it('the default keeps the host network: the wrap is byte-identical to the unhardened profile', async () => {
     const { sandbox } = await setup({ network: 'inherit' }, { platform: 'linux', probeBwrap: () => true })
     expect((await sandbox.confine(['true'], WW)).argv).toEqual(['bwrap', ...bwrapProfileArgs(WW), '--', 'true'])
@@ -225,6 +245,51 @@ describe('network hardening config', () => {
     const refused = sandbox.confine(['true'], RO)
     await expect(refused).rejects.toThrow(expect.objectContaining({ code: SANDBOX_UNAVAILABLE }))
     await expect(refused).rejects.toThrow(`the usable ${runner} runner cannot apply the configured hardening`)
+  })
+
+  it('hidePaths/exposeReadOnly reach the bwrap wrap canonicalized, and alone they still make bwrap the only runner', async () => {
+    const home = fakeHome()
+    const probeLandlock = vi.fn(() => 'full' as const)
+    const { sandbox } = await setup({ hidePaths: [home], exposeReadOnly: [join(home, 'keep')] }, { platform: 'linux', probeBwrap: () => true, probeLandlock })
+    const confined = await sandbox.confine(['true'], WW)
+    expect(confined.argv).toEqual([
+      'bwrap', ...bwrapProfileArgs(WW, { network: 'inherit', hidePaths: [home], exposeReadOnly: [join(home, 'keep')] }), '--', 'true',
+    ])
+    expect(confined.argv).toEqual(expect.arrayContaining(['--tmpfs', home, '--ro-bind', join(home, 'keep'), '--remount-ro']))
+
+    const landlockOnly = await setup({ hidePaths: [home] }, { platform: 'linux', probeBwrap: () => false, probeLandlock, landlockLauncher: fakeLauncher() })
+    const refused = landlockOnly.sandbox.confine(['true'], RO)
+    await expect(refused).rejects.toThrow(expect.objectContaining({ code: SANDBOX_UNAVAILABLE }))
+    await expect(refused).rejects.toThrow('the usable landlock runner cannot apply the configured hardening (hidePaths: 1); only bwrap can')
+  })
+
+  it('names every configured departure in the refusal', async () => {
+    const home = fakeHome()
+    const { sandbox } = await setup({ network: 'none', hidePaths: [home] }, { platform: 'darwin' })
+    await expect(sandbox.confine(['true'], RO)).rejects.toThrow('(network: "none", hidePaths: 1)')
+  })
+
+  it.each([
+    ['a relative hidePaths entry', { hidePaths: ['home/x'] }, 'hidePaths entry "home/x" must be an absolute path'],
+    ['masking the root', { hidePaths: ['/'] }, 'hidePaths cannot mask "/"'],
+    ['a missing hidePaths directory', { hidePaths: [join(tmpdir(), 'dsh-absent-home-dir')] }, 'is not an existing directory'],
+    ['exposeReadOnly without hidePaths', { exposeReadOnly: [tmpdir()] }, 'exposeReadOnly requires hidePaths'],
+  ])('rejects %s at load', async (_case, config, message) => {
+    await expect(setup(config)).rejects.toThrow(message)
+  })
+
+  it('rejects a hidePaths entry that is a file, not a directory', async () => {
+    const home = fakeHome()
+    await expect(setup({ hidePaths: [join(home, 'secret.txt')] })).rejects.toThrow('is not an existing directory')
+  })
+
+  it.each([
+    ['relative', () => 'keep', 'must be an absolute path'],
+    ['missing', (home: string) => join(home, 'absent'), 'does not exist'],
+    ['beneath no mask (a silent no-op)', () => tmpdir(), 'lies beneath no hidePaths entry'],
+  ])('rejects a %s exposeReadOnly entry at load', async (_case, entry, message) => {
+    const home = fakeHome()
+    await expect(setup({ hidePaths: [home], exposeReadOnly: [entry(home)] })).rejects.toThrow(message)
   })
 
   it('rejects a network value outside the vocabulary at load', async () => {

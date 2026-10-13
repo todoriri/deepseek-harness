@@ -1,9 +1,9 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, readlinkSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import type { SandboxPolicy } from '@deepseek-ai/dsh-sandbox'
@@ -173,6 +173,79 @@ describe.skipIf(!bwrapUsable)('sandbox-local: real bwrap confinement', () => {
     } finally {
       await listener.close()
     }
+  })
+
+  it('hidePaths masks a home directory: readable on the host and under the default profile, empty and read-only inside, the workspace beneath it still writable', async () => {
+    // review.12.10-late finding 2: an unprivileged user namespace changes no ownership, so
+    // `--ro-bind / /` hands the command every file the operator can read. Measured 2026-10-12 on
+    // this host inside the default workspace-write profile: 10 files under ~/.ssh, 1006 under
+    // ~/.dsh, ~/.config/gh/hosts.yml readable. The control run reproduces that read.
+    const home = await tempDir(homedir())
+    const workdir = await tempDir(home)
+    const secret = join(home, 'secret.txt')
+    writeFileSync(secret, 'operator-secret')
+    expect(readFileSync(secret, 'utf8')).toBe('operator-secret')
+    const control = await runConfined(await provider(), `cat ${secret}`, { mode: 'workspace-write', workspaceRoot: workdir })
+    expect(control.result.stdout).toBe('operator-secret')
+
+    const masked = await runConfined(
+      await provider({ hidePaths: [home] }),
+      `cat ${secret} 2>/dev/null; echo read-rc=$?; ls -A ${home}; printf x > ${home}/new.txt; echo write-rc=$?; printf ok > ${workdir}/inside.txt && echo ws-ok`,
+      { mode: 'workspace-write', workspaceRoot: workdir },
+    )
+    expect(masked.result.stdout).toContain('read-rc=1')
+    expect(masked.result.stdout).not.toContain('secret.txt')
+    expect(masked.result.stdout).toContain('write-rc=1')
+    expect(masked.result.stderr.toLowerCase()).toContain('read-only file system')
+    expect(masked.result.stdout).toContain('ws-ok')
+    expect(readFileSync(join(workdir, 'inside.txt'), 'utf8')).toBe('ok')
+    expect(existsSync(join(home, 'new.txt'))).toBe(false)
+  })
+
+  it('exposeReadOnly binds a toolchain path back into a masked directory, read-only', async () => {
+    const home = await tempDir(homedir())
+    const workdir = await tempDir(homedir())
+    mkdirSync(join(home, 'keep'))
+    writeFileSync(join(home, 'keep', 'tool.txt'), 'tool')
+    writeFileSync(join(home, 'secret.txt'), 'secret')
+    const sandbox = await provider({ hidePaths: [home], exposeReadOnly: [join(home, 'keep')] })
+    const { result } = await runConfined(
+      sandbox,
+      `cat ${home}/keep/tool.txt; cat ${home}/secret.txt 2>/dev/null; echo read-rc=$?; printf x > ${home}/keep/new.txt 2>/dev/null; echo write-rc=$?`,
+      { mode: 'workspace-write', workspaceRoot: workdir },
+    )
+    expect(result.stdout).toBe('toolread-rc=1\nwrite-rc=1\n')
+    expect(existsSync(join(home, 'keep', 'new.txt'))).toBe(false)
+  })
+
+  it('read-only mode keeps a mask read-only too: hiding a directory adds no writable sink', async () => {
+    const home = await tempDir(homedir())
+    const workdir = await tempDir(homedir())
+    const sandbox = await provider({ hidePaths: [home] })
+    const { result } = await runConfined(sandbox, `printf x > ${home}/new.txt`, { mode: 'read-only', workspaceRoot: workdir })
+    expect(result.status).not.toBe(0)
+    expect(result.stderr.toLowerCase()).toContain('read-only file system')
+    expect(existsSync(join(home, 'new.txt'))).toBe(false)
+  })
+
+  it('the production configuration: real $HOME masked, the network closed, node still runs from its re-exposed prefix', async () => {
+    // process.execPath is symlink-resolved; its prefix is exposed only when it lives under HOME
+    // (the operator case measured 2026-10-13: ~/.hermes/node), otherwise node is visible anyway.
+    const home = homedir()
+    const nodePrefix = dirname(dirname(process.execPath))
+    const exposeReadOnly = nodePrefix.startsWith(`${home}/`) ? [nodePrefix] : []
+    const workdir = await tempDir(homedir())
+    const marker = join(home, `dsh-bwrap-e2e-home-marker-${process.pid}.txt`)
+    tempFiles.push(marker)
+    writeFileSync(marker, 'marker')
+    const sandbox = await provider({ network: 'none', hidePaths: [home], exposeReadOnly })
+    const { result, confined } = await runConfined(
+      sandbox,
+      `${process.execPath} -e "process.stdout.write(process.version)"; echo; cat ${marker} 2>/dev/null; echo read-rc=$?`,
+      { mode: 'workspace-write', workspaceRoot: workdir },
+    )
+    expect(confined.argv).toEqual(expect.arrayContaining(['--unshare-net', '--tmpfs', home, '--remount-ro']))
+    expect(result.stdout, result.stderr).toBe(`${process.version}\nread-rc=1\n`)
   })
 
   it('keeps descendants observable and controllable inside the private PID namespace', async () => {

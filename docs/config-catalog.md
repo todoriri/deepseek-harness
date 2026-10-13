@@ -2615,6 +2615,21 @@ export interface Config {
    * running with the network open.
    */
   network?: 'inherit' | 'none'
+  /**
+   * Absolute host directories every confined command sees as an empty read-only directory; the
+   * operator's `$HOME` is the intended entry, since `--ro-bind / /` otherwise exposes `~/.ssh`,
+   * `~/.config/gh`, and the harness credential files to the command. Each must exist, must not be
+   * `/`, and is resolved to its canonical path at load. The workspace root and `/tmp` stay
+   * writable beneath a masked directory. Same runner support and refusal as {@link network}.
+   */
+  hidePaths?: string[]
+  /**
+   * Absolute host paths beneath a {@link hidePaths} entry bound back read-only: the toolchain a
+   * command still needs from a masked home, such as a node prefix and `~/.local/bin`. Each must
+   * exist and is resolved to its canonical path at load; a symlink's target must be listed too.
+   * Requires {@link hidePaths}; an entry beneath no mask is refused as a misconfiguration.
+   */
+  exposeReadOnly?: string[]
 }
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-sandbox-local -->

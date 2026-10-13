@@ -46,6 +46,8 @@ Load the sandbox service and mount the provider; the defaults below are the sele
 | `runnerFailureSignatures` | `[]` | Case-insensitive stderr substrings identifying the custom runner's own failure dialect; required with `runnerCommand` |
 | `probeTimeoutMs` | `5,000` | Timeout for each functional probe of a competing runner candidate |
 | `network` | `inherit` | Network reach of every confined command; `none` gives each a fresh network namespace holding only its own loopback (bwrap only) |
+| `hidePaths` | `[]` | Absolute host directories every confined command sees as an empty read-only directory, the operator's `$HOME` being the intended entry (bwrap only) |
+| `exposeReadOnly` | `[]` | Absolute paths beneath a `hidePaths` entry bound back read-only, such as a node prefix under a masked home; requires `hidePaths` |
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-sandbox-local) is the exhaustive source for every accepted field and its JSDoc.
 
@@ -62,6 +64,19 @@ With the provider mounted, a command runs under the mode you resolve per call. E
   name: '@deepseek-ai/dsh-sandbox-local'
   config:
     network: none
+```
+
+### Host-path hardening
+
+`--ro-bind / /` hands a confined command every file the operator can read: an unprivileged user namespace changes no ownership, so `~/.ssh`, `~/.config/gh`, and the harness credential files are readable by default. `hidePaths` replaces each listed directory with an empty read-only directory; `exposeReadOnly` binds the toolchain a command still needs back into it, read-only. The workspace root and `/tmp` stay writable beneath a masked directory. Which paths survive is the operator's list, because toolchain locations vary per host: a symlink's target must be listed too, every path must exist at load, and an exposure beneath no mask is refused as a misconfiguration. The same bwrap-only refusal as `network` applies.
+
+```yaml
+- id: sandbox
+  name: '@deepseek-ai/dsh-sandbox-local'
+  config:
+    network: none
+    hidePaths: ['/home/operator']
+    exposeReadOnly: ['/home/operator/.local/share/node', '/home/operator/.local/bin']
 ```
 
 ### Failures and recovery
@@ -84,7 +99,7 @@ Selection is by platform first, probes second: each platform has a runner chain 
 
 ### Platform profiles
 
-The bwrap profile combines a read-only host root, a fresh `/dev`, and `/proc` from a private PID namespace — commands manage their descendants but cannot see host processes, so procfs magic links cannot bypass the mounts; `workspace-write` adds an ephemeral `/tmp` and a writable workspace bind. The [historical private-PID note](../../../.agents/notes/archived/bug-fix/2026-08-06-bwrap-private-pid-namespace.md) records the boundary. `network: none` appends `--unshare-net` after the socket hardening, and the bwrap probe runs the hardened profile, so a host whose bwrap refuses the flag reads unusable instead of failing every command.
+The bwrap profile combines a read-only host root, a fresh `/dev`, and `/proc` from a private PID namespace — commands manage their descendants but cannot see host processes, so procfs magic links cannot bypass the mounts; `workspace-write` adds an ephemeral `/tmp` and a writable workspace bind. The [historical private-PID note](../../../.agents/notes/archived/bug-fix/2026-08-06-bwrap-private-pid-namespace.md) records the boundary. `network: none` appends `--unshare-net` after the socket hardening, and the bwrap probe runs the hardened profile, so a host whose bwrap refuses the flag reads unusable instead of failing every command. Each `hidePaths` entry starts as a writable tmpfs so bwrap can create the mountpoints beneath it, the `exposeReadOnly` binds and the workspace bind, and is remounted read-only last; the remount is not recursive, so the workspace beneath a mask stays writable.
 
 The `@deepseek-ai/node-addon-system/landlock-run` API supplies the platform launcher, functional probe, and grant vocabulary; this provider maps mode to grants only, keeping path resolution and probe parsing with the versioned binary.
 
@@ -145,7 +160,7 @@ These limits define when the provider is a poor fit or needs special operational
 - **Seatbelt depends on deprecated `sandbox-exec`** — macOS still ships it, but this provider cannot replace or probe that private policy engine if Apple removes it.
 - **Runner selection is cached for the provider lifetime** — installing, removing, or repairing a runner requires reloading the plugin before selection changes.
 - **`runnerCommand` is an operator assertion** — a configured custom runner skips functional probes and is assumed to implement the bwrap-compatible profile honestly; if it is itself a Bash script, its interpreter startup runs before that script applies confinement.
-- **Network hardening is bwrap-only** — `network: none` has no Landlock, Seatbelt, or Windows ACL implementation; the provider refuses those runners under that configuration instead of dropping it, so a host without usable bwrap cannot confine at all once it is set.
+- **Network and host-path hardening are bwrap-only** — `network: none`, `hidePaths`, and `exposeReadOnly` have no Landlock, Seatbelt, or Windows ACL implementation; the provider refuses those runners under that configuration instead of dropping it, so a host without usable bwrap cannot confine at all once they are set.
 
 <a id="dev-note"></a>
 ### Dev Note
