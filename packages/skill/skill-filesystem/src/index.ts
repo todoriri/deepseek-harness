@@ -717,10 +717,22 @@ function isAbsentPathError(error: unknown): boolean {
   return hasErrorCode(error, 'ENOENT') || hasErrorCode(error, 'ENOTDIR')
 }
 
+/**
+ * Is this path simply NOT USABLE here — missing, not a directory, or outside what the
+ * session's filesystem fence permits?
+ *
+ * The last case is `FS_SANDBOX_DENIED`, raised by `fs-sandbox`'s read fence for any skill
+ * root outside the session's writable roots. A confined session can only see the skills
+ * the fence allows, so a denied root is ABSENT to it — the same answer as a missing one,
+ * and deliberately NOT the incomplete-observation path a transient failure takes: a
+ * denial is stable, so treating it as a failure would empty the catalog with an opaque
+ * error on every lookup instead of reporting the skills the session legitimately has.
+ */
 function isAbsentSkillPathError(error: unknown): boolean {
   return isAbsentPathError(error)
     || hasErrorCode(error, 'FS_NOT_FOUND')
     || hasErrorCode(error, 'FS_NOT_DIRECTORY')
+    || hasErrorCode(error, 'FS_SANDBOX_DENIED')
 }
 
 function hasErrorCode(error: unknown, code: string): boolean {

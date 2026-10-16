@@ -36,6 +36,9 @@ class TestFileSystem extends FileSystem {
   failResolvePaths = new Set<string>()
   failStatPaths = new Set<string>()
   failListDirPaths = new Set<string>()
+  /** Paths the session's read fence denies (`FS_SANDBOX_DENIED`, D135): absent, not failed. */
+  deniedListDirPaths = new Set<string>()
+  deniedReadPaths = new Set<string>()
   errorResolvePaths = new Set<string>()
   errorStatPaths = new Set<string>()
   errorReadPaths = new Set<string>()
@@ -94,6 +97,7 @@ class TestFileSystem extends FileSystem {
   override async readText(target: FsTarget, signal?: AbortSignal): Promise<string> {
     this.readTextSignals.push(signal)
     if (this.readTextOverride !== undefined) return await this.readTextOverride(target, signal)
+    if (this.deniedReadPaths.has(target.displayPath)) throw new FsError('read fenced', 'FS_SANDBOX_DENIED')
     if (this.missingReadPaths.has(target.displayPath)) throw new FsError('read failed', 'FS_NOT_FOUND')
     if (this.errorReadPaths.has(target.displayPath)) throw new Error('read temporarily failed')
     const text = await readFile(target.displayPath, 'utf8')
@@ -115,6 +119,7 @@ class TestFileSystem extends FileSystem {
 
   override async listDir(target: FsTarget): Promise<FsDirEntry[]> {
     this.listDirCalls += 1
+    if (this.deniedListDirPaths.has(target.displayPath)) throw new FsError('list fenced', 'FS_SANDBOX_DENIED')
     if (this.failListDirPaths.has(target.displayPath)) throw new Error('list temporarily failed')
     const entries = await readdir(target.displayPath, { withFileTypes: true, encoding: 'utf8' })
     const result: FsDirEntry[] = []
@@ -592,6 +597,77 @@ describe('FileSystemSkillProvider', () => {
       skills: [{ name: 'stable-skill' }],
       complete: true,
     })
+  })
+
+  it('treats a read-fenced skill root as absent instead of failing the whole observation', async () => {
+    // D135 (loopcc review.16.10 F5): the fence denies roots outside the session's writable set with
+    // FS_SANDBOX_DENIED, so a confined session legitimately has no skills there. That must read as
+    // ABSENT (a complete, empty catalog) — not as the transient-failure path, which would report an
+    // incomplete observation and surface an opaque error on every lookup.
+    const home = await tempDir('skill-fenced-root')
+    const root = join(home, '.agents/skills')
+    await writeSkill(root, 'stable-skill', 'Stable skill')
+    const ctx = new Context()
+    await ctx.plugin(TestFileSystem)
+    const fs = ctx.fs as TestFileSystem
+    await ctx.plugin(SkillRegistry)
+    await ctx.plugin(SkillFileSystem, {
+      dshHome: join(home, '.dsh'),
+      agentsHome: join(home, '.agents'),
+      watch: false,
+    })
+
+    expect(await ctx.skills.snapshot()).toMatchObject({
+      skills: [{ name: 'stable-skill' }],
+      complete: true,
+    })
+
+    fs.deniedListDirPaths.add(root)
+    const path = join(root, 'stable-skill/SKILL.md')
+    ctx.emit(
+      'fs/observed',
+      { targetKey: path as never, displayPath: path },
+      { kind: 'present', version: FsVersion('fenced-root') },
+      { name: 'write' },
+    )
+    expect(await ctx.skills.snapshot()).toEqual({ skills: [], complete: true })
+
+    // A denial is a COMPLETE observation, so the empty catalog is cached — unlike the transient
+    // failure above, where the incomplete result is re-listed on the next lookup. A later mutation
+    // re-discovers, which is the only path back once the fence stops denying.
+    fs.deniedListDirPaths.clear()
+    ctx.emit(
+      'fs/observed',
+      { targetKey: path as never, displayPath: path },
+      { kind: 'present', version: FsVersion('fence-lifted') },
+      { name: 'write' },
+    )
+    expect(await ctx.skills.snapshot()).toMatchObject({
+      skills: [{ name: 'stable-skill' }],
+      complete: true,
+    })
+  })
+
+  it('skips a read-fenced skill file while its unfenced siblings stay readable', async () => {
+    const home = await tempDir('skill-fenced-file')
+    const root = join(home, '.agents/skills')
+    await writeSkill(root, 'fenced-skill', 'Fenced skill')
+    await writeSkill(root, 'visible-skill', 'Visible skill')
+    const ctx = new Context()
+    await ctx.plugin(TestFileSystem)
+    const fs = ctx.fs as TestFileSystem
+    await ctx.plugin(SkillRegistry)
+    await ctx.plugin(SkillFileSystem, {
+      dshHome: join(home, '.dsh'),
+      agentsHome: join(home, '.agents'),
+      watch: false,
+    })
+
+    fs.deniedReadPaths.add(join(root, 'fenced-skill/SKILL.md'))
+    const snapshot = await ctx.skills.snapshot()
+    expect(snapshot.complete).toBe(true)
+    expect((snapshot as { skills: Array<{ name: string }> }).skills.map(skill => skill.name))
+      .toEqual(['visible-skill'])
   })
 
   it('marks an unexpected native skill-file read failure incomplete', async () => {
