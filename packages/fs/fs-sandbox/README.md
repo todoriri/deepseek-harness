@@ -25,7 +25,7 @@ English | [中文](README.zh.md)
 <a id="use-this-package"></a>
 ## Use this package
 
-Mount this backend instead of `fs-local` when the model's file writes and edits must be confined by the session's sandbox mode, while reads stay unconfined. The fence applies per call: the tool layer resolves the calling session's mode and workspace root into the same policy the bash runner receives, so the filesystem and shell families never confine to different roots.
+Mount this backend instead of `fs-local` when the model's file writes and edits must be confined by the session's sandbox mode. Reads stay unconfined by default; set `fenceReads: true` when the model is untrusted code, which contains the reading tools to the same roots. The fence applies per call: the tool layer resolves the calling session's mode and workspace root into the same policy the bash runner receives, so the filesystem and shell families never confine to different roots.
 
 ### Minimal composition
 
@@ -36,18 +36,23 @@ Load the shared policy service, then this backend, then the tools; the read-befo
 - name: '@deepseek-ai/dsh-fs-sandbox'
   config:
     cwd: /absolute/path/to/workspace
+    # Contain `read`, `read_image`, `list` and search to the workspace + temp
+    # roots. Leave it out for a cooperative author that needs host context.
+    fenceReads: true
 - name: '@deepseek-ai/dsh-tool-fs'
 ```
 
-The backend's config is unchanged from the local backend's (`cwd` resolution default and `diffBasisMaxBytes` overwrite bound); the [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-fs-sandbox) is the exhaustive source.
+Alongside the local backend's knobs (`cwd` resolution default and `diffBasisMaxBytes` overwrite bound), this backend adds `fenceReads`; the [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-fs-sandbox) is the exhaustive source.
 
 ### How the fence behaves
 
 The effective mode comes from the calling session's override or escalation grant, falling back to the deployment default when neither is in force. `read-only` denies every mutation with the structured `FS_SANDBOX_DENIED`. `workspace-write` allows a mutation only when the target canonicalizes under the workspace root or a platform temp area (`/tmp`, `os.tmpdir()`) — the same writable set the Seatbelt profile grants. `danger-full-access` delegates unfenced.
 
+With `fenceReads: true`, the content-bearing reads (`readText`, `streamText`, `readBytes`, `readByteRange`, `listDir`) follow that same policy under `workspace-write`. The option only ever NARROWS: `read-only` and `danger-full-access` keep permitting every read, so enabling it cannot grant access a session did not already have. Metadata reads (`stat`, `lstat`) stay unfenced — they expose existence and size, never content.
+
 ### Observable success and failures
 
-Reads, listings, metadata, and read-only watches work exactly as with `fs-local`; the mutation fence does not restrict observation. A denied mutation returns an `FS_SANDBOX_DENIED` error carrying the effective mode; through the tools the model sees `[sandbox: file access denied under <mode> mode]` plus the one-approved-wider retry hint, identical to bash's denials. A session with an approved escalation may retry the same operation at a strictly wider mode for that one call.
+Reads, listings, metadata, and read-only watches work exactly as with `fs-local` unless `fenceReads` is set; the mutation fence does not restrict observation. A denied mutation returns an `FS_SANDBOX_DENIED` error carrying the effective mode; through the tools the model sees `[sandbox: file access denied under <mode> mode]` plus the one-approved-wider retry hint, identical to bash's denials. A denied read returns the same shape and no content at all — a denied stream yields no prefix. A session with an approved escalation may retry the same operation at a strictly wider mode for that one call.
 
 -----
 
@@ -67,12 +72,16 @@ The fence is a policy check in trusted code over a model-controlled path — not
 
 | File | Role |
 |---|---|
-| [`src/index.ts`](src/index.ts) | `SandboxedFileSystem`: mode fence on `writeText`/`editText`, `sandboxMode` fact |
+| [`src/index.ts`](src/index.ts) | `SandboxedFileSystem`: mode fence on `writeText`/`editText`, the optional `fenceReads` fence on `readText`/`streamText`/`readBytes`/`readByteRange`/`listDir`, `sandboxMode` fact |
 | [`src/containment.ts`](src/containment.ts) | Ancestor containment check with lexical fast path and identity-based fallback |
 
 ### How a mutation is fenced
 
 Each mutation resolves the per-call policy (`danger-full-access` returns the caller's target untouched; `read-only` throws `FS_SANDBOX_DENIED`), then for `workspace-write` re-canonicalizes the target immediately and requires containment under one of the writable roots derived from the single `writableRoots` function — the same set the Seatbelt profile grants, so the fs fence and the bash runner cannot drift. The fresh target is the one mutated, so a symlink ancestor swapped since the tool resolved it is caught.
+
+### How a read is fenced
+
+Only when `fenceReads` is enabled, and only under `workspace-write`: the guard re-canonicalizes the target through the same `resolve` the mutations use, requires containment under the same `writableRoots` set, and hands THAT fresh target to the inherited read — so a symlink ancestor swapped since the tool resolved the target is caught, and the identity checked is the one read. The check runs before any content is produced, so a denied stream yields nothing rather than a prefix.
 
 ### Threat model
 

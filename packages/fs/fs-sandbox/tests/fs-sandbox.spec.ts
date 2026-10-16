@@ -1,11 +1,13 @@
 /**
  * Tests for the sandbox-enforcing filesystem backend: the per-call policy fence
  * on write/edit (read-only denies, workspace-write contains, danger-full-access
- * passes through), reads always passing through, the capability fact, and the
- * containment matrix — `..` traversal, absolute paths outside, and symlink
- * escapes (a symlinked directory inside the workspace pointing out, and a new
- * file created under one). The fence is exercised on a real filesystem: a
- * denied write leaves no file on disk.
+ * passes through), reads passing through by default, the optional read fence
+ * (`fenceReads` contains the content-bearing reads to the same roots the writes
+ * use, and only ever narrows), the capability fact, and the containment matrix —
+ * `..` traversal, absolute paths outside, and symlink escapes (a symlinked
+ * directory inside the workspace pointing out, and a new file created under one).
+ * The fence is exercised on a real filesystem: a denied write leaves no file on
+ * disk, and a denied read returns no content.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -29,11 +31,11 @@ let ctx: Context
 let fs: SandboxedFileSystem
 let fiber: Awaited<ReturnType<Context['plugin']>>
 
-async function boot(mode: SandboxMode): Promise<void> {
+async function boot(mode: SandboxMode, options: { fenceReads?: boolean } = {}): Promise<void> {
   ctx = new Context()
   await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(SandboxPolicyService, { mode, workspaceRoot: workspace })
-  fiber = await ctx.plugin(SandboxedFileSystem, { cwd: workspace })
+  fiber = await ctx.plugin(SandboxedFileSystem, { cwd: workspace, ...options })
   fs = ctx.fs as SandboxedFileSystem
 }
 
@@ -188,6 +190,92 @@ describe('workspace-write with the filesystem root as the workspace (a root endi
     } finally {
       await rootFiber.dispose()
     }
+  })
+})
+
+describe('the read fence (fenceReads)', () => {
+  describe('default: off', () => {
+    beforeEach(() => boot('workspace-write'))
+
+    it('reads a file outside the workspace — the historical behaviour, and the reason the option exists', async () => {
+      const path = join(outside, 'secret.txt')
+      await writeFile(path, 'operator-secret')
+      expect(await fs.readText(await target(path))).toBe('operator-secret')
+    })
+  })
+
+  describe('workspace-write with fenceReads: true', () => {
+    beforeEach(() => boot('workspace-write', { fenceReads: true }))
+
+    it('reads a file inside the workspace', async () => {
+      const path = join(workspace, 'readable.txt')
+      await writeFile(path, 'hello')
+      expect(await fs.readText(await target(path))).toBe('hello')
+    })
+
+    it('reads in the platform temp area (parity with the write grant)', async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'dsh-fssbx-read-'))
+      try {
+        const path = join(dir, 'temp.txt')
+        await writeFile(path, 'temp')
+        expect(await fs.readText(await target(path))).toBe('temp')
+      } finally {
+        await rm(dir, { recursive: true, force: true })
+      }
+    })
+
+    it('denies an absolute path outside the workspace (the operator credential the bash mask cannot cover)', async () => {
+      const path = join(outside, 'secret.txt')
+      await writeFile(path, 'operator-secret')
+      await expect(fs.readText(await target(path))).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    })
+
+    it('denies streamText, readBytes, readByteRange and listDir outside the workspace', async () => {
+      const path = join(outside, 'secret.txt')
+      await writeFile(path, 'operator-secret')
+      // Awaited one at a time: passing `[fs.readText(...)]` to `Promise.all` would
+      // leave the later rejections unhandled and vitest would flag the run.
+      await expect(fs.readText(await target(path))).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+      await expect(fs.streamText(await target(path))).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+      await expect(fs.readBytes(await target(path), undefined, 1024)).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+      await expect(fs.readByteRange(await target(path), { offset: 0, length: 4 })).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+      await expect(fs.listDir(await target(outside))).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    })
+
+    it('denies a read through a symlinked directory inside the workspace pointing OUT (canonicalized)', async () => {
+      // workspace/link -> outside ; reading workspace/link/f.txt would read outside/f.txt.
+      await symlink(outside, join(workspace, 'link'))
+      const path = join(workspace, 'link', 'f.txt')
+      await writeFile(join(outside, 'f.txt'), 'escaped')
+      await expect(fs.readText(await target(path))).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    })
+
+    it('denies a read whose stale targetKey points outside while its displayPath is inside', async () => {
+      // The TOCTOU direction: a target resolved while an ancestor pointed out, whose
+      // displayPath now reads inside. The fence re-resolves displayPath and reads THAT,
+      // so the stale outside identity is never opened.
+      const insidePath = join(workspace, 'landed.txt')
+      await writeFile(insidePath, 'inside')
+      await writeFile(join(outside, 'escaped.txt'), 'outside')
+      const staleTarget: FsTarget = { displayPath: insidePath, targetKey: FsTargetKey(join(outside, 'escaped.txt')) }
+      expect(await fs.readText(staleTarget)).toBe('inside')
+    })
+
+    it('leaves metadata reads unfenced (stat reveals existence, never content)', async () => {
+      const path = join(outside, 'secret.txt')
+      await writeFile(path, 'operator-secret')
+      expect((await fs.stat(await target(path)))?.type).toBe('file')
+    })
+  })
+
+  describe('read-only with fenceReads: true', () => {
+    beforeEach(() => boot('read-only', { fenceReads: true }))
+
+    it('still permits every read — the fence NARROWS workspace-write, it never grants', async () => {
+      const path = join(outside, 'secret.txt')
+      await writeFile(path, 'operator-secret')
+      expect(await fs.readText(await target(path))).toBe('operator-secret')
+    })
   })
 })
 

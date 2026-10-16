@@ -25,7 +25,7 @@ kind: "package-reference"
 <a id="use-this-package"></a>
 ## 使用本包
 
-当模型的文件写入与编辑必须受会话沙箱模式约束、而读取保持不受约束时，挂载此后端以替代 `fs-local`。围栏按调用生效：工具层把调用会话的模式与工作区根目录解析为与 bash runner 收到的相同策略，因此文件系统与 shell 两个能力族绝不会约束到不同根目录。
+当模型的文件写入与编辑必须受会话沙箱模式约束时，挂载此后端以替代 `fs-local`。读取默认不受约束；当模型属于不可信代码时设置 `fenceReads: true`，把读取工具一并约束到相同的根目录。围栏按调用生效：工具层把调用会话的模式与工作区根目录解析为与 bash runner 收到的相同策略，因此文件系统与 shell 两个能力族绝不会约束到不同根目录。
 
 ### 最小组合
 
@@ -36,18 +36,23 @@ kind: "package-reference"
 - name: '@deepseek-ai/dsh-fs-sandbox'
   config:
     cwd: /absolute/path/to/workspace
+    # Contain `read`, `read_image`, `list` and search to the workspace + temp
+    # roots. Leave it out for a cooperative author that needs host context.
+    fenceReads: true
 - name: '@deepseek-ai/dsh-tool-fs'
 ```
 
-后端的配置与本地后端完全相同（`cwd` 解析默认值与 `diffBasisMaxBytes` 覆写上限）；[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-fs-sandbox)是完整配置的真源。
+（代码块两侧逐字一致，故上方注释与英文侧相同。）除本地后端自身的旋钮（`cwd` 解析默认值与 `diffBasisMaxBytes` 覆写上限）之外，此后端新增 `fenceReads`；[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-fs-sandbox)是完整配置的真源。
 
 ### 围栏行为
 
 有效模式来自调用会话的覆盖值或升级授权，两者都未生效时才回退到部署默认值。`read-only` 以结构化 `FS_SANDBOX_DENIED` 拒绝所有变更。`workspace-write` 只允许目标规范化后位于工作区根目录或平台临时区域（`/tmp`、`os.tmpdir()`）之下的变更——与 Seatbelt profile 授权的可写集合相同。`danger-full-access` 不加围栏直接委托。
 
+当 `fenceReads: true` 时，承载内容的读取（`readText`、`streamText`、`readBytes`、`readByteRange`、`listDir`）在 `workspace-write` 下遵循同一策略。该选项只会收窄：`read-only` 与 `danger-full-access` 仍允许所有读取，因此启用它不可能授予会话原本没有的访问权。元数据读取（`stat`、`lstat`）保持不受围栏——它们只暴露存在性与大小，绝不暴露内容。
+
 ### 可观察的成功与失败
 
-读取、列出、元数据操作与只读监听均与 `fs-local` 完全一致；变更围栏不限制观察。被拒绝的变更返回携带有效模式的 `FS_SANDBOX_DENIED` 错误；经工具，模型会看到 `[sandbox: file access denied under <mode> mode]` 及唯一一次获批更宽权限的重试提示，与 bash 的拒绝完全相同。获得批准升级的会话可以在该次调用中以严格更宽的模式重试同一操作。
+读取、列出、元数据操作与只读监听均与 `fs-local` 完全一致，除非设置了 `fenceReads`；变更围栏不限制观察。被拒绝的变更返回携带有效模式的 `FS_SANDBOX_DENIED` 错误；经工具，模型会看到 `[sandbox: file access denied under <mode> mode]` 及唯一一次获批更宽权限的重试提示，与 bash 的拒绝完全相同。被拒绝的读取返回相同形状且完全不返回内容——被拒绝的流不产生任何前缀。获得批准升级的会话可以在该次调用中以严格更宽的模式重试同一操作。
 
 -----
 
@@ -67,12 +72,16 @@ kind: "package-reference"
 
 | 文件 | 职责 |
 |---|---|
-| [`src/index.ts`](src/index.ts) | `SandboxedFileSystem`：`writeText`/`editText` 上的模式围栏、`sandboxMode` 事实 |
+| [`src/index.ts`](src/index.ts) | `SandboxedFileSystem`：`writeText`/`editText` 上的模式围栏、可选的 `fenceReads` 对 `readText`/`streamText`/`readBytes`/`readByteRange`/`listDir` 的围栏、`sandboxMode` 事实 |
 | [`src/containment.ts`](src/containment.ts) | 祖先包含检查，带词法快速路径与基于身份的兜底 |
 
 ### 变更如何被围栏
 
 每次变更先解析按调用策略（`danger-full-access` 原样返回调用方目标；`read-only` 抛出 `FS_SANDBOX_DENIED`），`workspace-write` 则立即重新规范化目标，并要求它位于由唯一的 `writableRoots` 函数派生的某个可写根之下——与 Seatbelt profile 授权的集合相同，因此 fs 围栏与 bash runner 不会漂移。被变更的正是这个新目标，因此工具解析后被替换的符号链接祖先也会被发现。
+
+### 读取如何被围栏
+
+仅在启用 `fenceReads` 且模式为 `workspace-write` 时：守卫通过与变更相同的 `resolve` 重新规范化目标，要求它位于同一 `writableRoots` 集合之下，并把该新目标交给继承的读取——因此工具解析后被替换的符号链接祖先也会被发现，被检查的身份就是被读取的身份。检查在任何内容产生之前运行，因此被拒绝的流不产生任何内容，而不是先给前缀再拒绝。
 
 ### 威胁模型
 

@@ -1378,16 +1378,35 @@ export interface Config {
 
 - `inject`: `sandboxPolicy`
 - `refs`: [`LocalConfig`](#deepseek-aidsh-fs-local)
-- `source`: [`packages/fs/fs-sandbox/src/index.ts:45`](../packages/fs/fs-sandbox/src/index.ts)
+- `source`: [`packages/fs/fs-sandbox/src/index.ts:55`](../packages/fs/fs-sandbox/src/index.ts)
 
 ```ts config-catalog
 /**
  * Plugin config: the local backend's knobs verbatim (`cwd` resolution default
- * and `diffBasisMaxBytes` overwrite-presentation bound). The sandbox default
- * (mode + `workspace-write` fallback root) is NOT here — `ctx.sandboxPolicy`
- * resolves each calling session for every enforcing capability.
+ * and `diffBasisMaxBytes` overwrite-presentation bound), plus the read fence.
+ * The sandbox default (mode + `workspace-write` fallback root) is NOT here —
+ * `ctx.sandboxPolicy` resolves each calling session for every enforcing
+ * capability.
  */
-export type Config = LocalConfig
+export interface Config extends LocalConfig {
+  /**
+   * Contain the content-bearing reads to the same roots the `workspace-write`
+   * mode already confines WRITES to (the policy's workspace root plus the
+   * platform temp areas). Defaults to `false`: reads stay unfenced, which is
+   * this backend's historical behaviour and what a cooperative author wants —
+   * an agent that can only read its workspace cannot gather context from the
+   * rest of the host.
+   *
+   * Turn it on when the model is untrusted CODE rather than a cooperative
+   * author, and the bash runner's kernel mask is not enough: the file tools run
+   * in the HARNESS process with the deployment's privileges, where a bwrap
+   * `hidePaths` mask cannot reach. The fence is the SAME containment predicate
+   * the writes use, so a session can never read what a differently-confined
+   * shell could not; `read-only` and `danger-full-access` are unaffected, so
+   * enabling it can only narrow reads.
+   */
+  fenceReads?: boolean
+}
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-fs-sandbox -->
 
