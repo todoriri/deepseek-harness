@@ -6,9 +6,10 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { createReadStream, realpath as realpathCallback } from 'node:fs'
-import { chmod, link, lstat, mkdir, open, readFile, readdir, rename, rm, stat } from 'node:fs/promises'
+import { constants as fsConstants, createReadStream, existsSync, realpath as realpathCallback } from 'node:fs'
+import { chmod, link, lstat, mkdir, open, readFile, readdir, readlink, rename, rm, stat } from 'node:fs/promises'
 import type { BigIntStats, Dirent, Stats } from 'node:fs'
+import type { FileHandle } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { TextDecoder, promisify } from 'node:util'
 import { FsError, FsTargetKey, FsVersion } from '@deepseek-ai/dsh-fs'
@@ -19,8 +20,33 @@ const realpath = promisify(realpathCallback.native)
 // Bound one non-abortable FileHandle.read so cancellation is observed between chunks.
 const DIFF_BASIS_READ_CHUNK_BYTES = 64 * 1024
 
+/**
+ * Whether this host can pin an ALREADY-OPENED descriptor. Node has no `openat`,
+ * so the only fd-relative names available are `/proc/self/fd/<fd>` — present on
+ * Linux. Everywhere else the descriptor primitives below are inert (the fence
+ * keeps its path check-then-open) and the backend reports that honestly rather
+ * than pretending to verify.
+ */
+export const FD_PINNING_AVAILABLE = process.platform === 'linux' && existsSync('/proc/self/fd')
+
+/**
+ * The path-shaped alias of an open descriptor: opening it re-opens the SAME file,
+ * and any child lookup under it resolves against the descriptor's directory, not
+ * the (possibly swapped) directory name.
+ * @param fd - an open descriptor this process owns.
+ * @returns the absolute `/proc/self/fd/<fd>` alias.
+ */
+export function descriptorPath(fd: number): string {
+  return `/proc/self/fd/${fd}`
+}
+
 function isENOENT(error: unknown): boolean {
   return error instanceof Error && 'code' in error && error.code === 'ENOENT'
+}
+
+/** `O_NOFOLLOW` on a swapped component reports ELOOP (a symlink where a name was expected). */
+function isELOOP(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 'ELOOP'
 }
 
 function isEEXIST(error: unknown): boolean {
@@ -515,6 +541,209 @@ export async function* streamWholeText(target: LocalTarget, signal?: AbortSignal
     if (isAbortError(error)) throw new FsError('read aborted', 'FS_ABORTED')
     throw error
   }
+}
+
+// --- Descriptor pinning (opt-in; see `LocalFileSystem.verifyOpens`) ---
+
+function identityDenied(verb: 'read' | 'write' | 'edit', displayPath: string): FsError {
+  return new FsError(
+    `cannot ${verb} "${displayPath}": the target no longer matches the resolved path`,
+    'FS_SANDBOX_DENIED',
+  )
+}
+
+/**
+ * The one predicate the descriptor primitives rest on: the path the kernel
+ * reports for the OPENED descriptor must be exactly the canonical target the
+ * caller resolved (and, in the sandboxing backend, checked for containment).
+ * The read is then served FROM that descriptor, so a swap after the check cannot
+ * redirect it. A descriptor that vanished or was unlinked fails closed.
+ */
+async function descriptorIs(handle: FileHandle, expected: string): Promise<boolean> {
+  try {
+    return (await readlink(descriptorPath(handle.fd))) === expected
+  } catch {
+    /* v8 ignore next -- an fd that is open by definition has a readable /proc alias; fail closed if it does not. */
+    return false
+  }
+}
+
+/**
+ * Open a resolved target with `O_NOFOLLOW` on the final component and verify the
+ * descriptor's identity BEFORE any byte is returned.
+ *
+ * `resolve` yields a canonical path (every existing component already realpath'd),
+ * so a symlink where a component is expected can only have appeared after the
+ * caller's resolution — the swap this closes. Verification failure is a sandbox
+ * denial: the caller's containment check was made on this canonical path, and the
+ * descriptor is not that path.
+ * @param target - the resolved target (display path for messages, canonical key to open).
+ * @param signal - aborts before the open and after it.
+ * @returns the verified descriptor; the caller reads from it and closes it.
+ */
+export async function openVerifiedFile(target: LocalTarget, signal?: AbortSignal): Promise<FileHandle> {
+  throwIfAborted(signal, 'read')
+  let handle: FileHandle
+  try {
+    handle = await open(target.targetKey, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)
+  } catch (error: unknown) {
+    if (isENOENT(error) || isENOTDIR(error)) {
+      throw new FsError(`cannot read "${target.displayPath}": not found`, 'FS_NOT_FOUND', { cause: error })
+    }
+    if (isELOOP(error)) throw identityDenied('read', target.displayPath)
+    throw error
+  }
+  throwIfAborted(signal, 'read')
+  if (!(await descriptorIs(handle, target.targetKey))) {
+    await handle.close()
+    throw identityDenied('read', target.displayPath)
+  }
+  return handle
+}
+
+/** A pinned destination directory: child operations through {@link PinnedDirectory.path} resolve against the descriptor. */
+export interface PinnedDirectory {
+  /** `/proc/self/fd/<dirfd>` — the directory the pin opened, whatever its name is now. */
+  path: string
+  /** The canonical path the pin (or the child creation) verified, for child identity checks. */
+  directory: string
+  /** Release the descriptor; call only after every operation through `path` is done. */
+  close: () => Promise<void>
+}
+
+/**
+ * Open a named child of a pinned directory with `O_NOFOLLOW` and verify it is
+ * exactly `join(directory, name)`. A symlink swapped in at the child's name
+ * therefore fails before any content is read, and the returned descriptor is the
+ * identity the caller then reads from.
+ * @param pinned - the verified parent directory.
+ * @param name - the child's basename.
+ * @param displayPath - caller-facing target path for refusal messages.
+ * @param verb - the operation named in the refusal.
+ * @param signal - aborts before and after the open.
+ * @returns the verified child descriptor; the caller reads from it and closes it.
+ */
+export async function openVerifiedChildFile(
+  pinned: PinnedDirectory,
+  name: string,
+  displayPath: string,
+  verb: 'read' | 'write' | 'edit',
+  signal?: AbortSignal,
+): Promise<FileHandle> {
+  throwIfAborted(signal, verb)
+  const expected = join(pinned.directory, name)
+  let handle: FileHandle
+  try {
+    handle = await open(`${pinned.path}/${name}`, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)
+  } catch (error: unknown) {
+    if (isENOENT(error) || isENOTDIR(error)) {
+      throw new FsError(`cannot ${verb} "${displayPath}": not found`, 'FS_NOT_FOUND', { cause: error })
+    }
+    if (isELOOP(error)) throw identityDenied(verb, displayPath)
+    throw error
+  }
+  throwIfAborted(signal, verb)
+  if (!(await descriptorIs(handle, expected))) {
+    await handle.close()
+    throw identityDenied(verb, displayPath)
+  }
+  return handle
+}
+
+async function openVerifiedDirectory(path: string, displayPath: string): Promise<FileHandle> {
+  let handle: FileHandle
+  try {
+    handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW)
+  } catch (error: unknown) {
+    // `O_DIRECTORY|O_NOFOLLOW` reports a swapped symlink as ENOTDIR on Linux (the
+    // name is no longer a directory); a plain file in that position is the same
+    // refusal for a mutation whose destination was canonical at resolve time.
+    if (isELOOP(error) || isENOTDIR(error)) throw identityDenied('write', displayPath)
+    throw error
+  }
+  if (!(await descriptorIs(handle, path))) {
+    await handle.close()
+    throw identityDenied('write', displayPath)
+  }
+  return handle
+}
+
+async function openVerifiedChildDirectory(
+  parent: FileHandle,
+  parentPath: string,
+  name: string,
+  displayPath: string,
+): Promise<FileHandle> {
+  const expected = join(parentPath, name)
+  let handle: FileHandle
+  try {
+    handle = await open(`${descriptorPath(parent.fd)}/${name}`,
+      fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW)
+  } catch (error: unknown) {
+    /* v8 ignore next -- `O_DIRECTORY|O_NOFOLLOW` reports a swapped child symlink as ENOTDIR here too. */
+    if (isELOOP(error) || isENOTDIR(error)) throw identityDenied('write', displayPath)
+    throw error
+  }
+  if (!(await descriptorIs(handle, expected))) {
+    await handle.close()
+    throw identityDenied('write', displayPath)
+  }
+  return handle
+}
+
+/**
+ * Pin the destination directory of a mutation: open it, verify the descriptor,
+ * and — when intermediate directories are still missing — create them one at a
+ * time RELATIVE to the already-pinned parent, opening each new directory with
+ * `O_NOFOLLOW` and verifying it before descending. A symlink swapped anywhere in
+ * the chain therefore fails the pin instead of redirecting the staging write, and
+ * a swap after the pin cannot move the directory the descriptor names.
+ * @param directory - the canonical destination directory (missing suffix allowed).
+ * @param displayPath - the caller-facing target path for refusal messages.
+ * @param signal - aborts between steps.
+ * @returns the pinned directory and its `/proc/self/fd/<dirfd>` path.
+ */
+export async function pinDirectory(directory: string, displayPath: string, signal?: AbortSignal): Promise<PinnedDirectory> {
+  throwIfAborted(signal, 'write')
+  const missing: string[] = []
+  let existing = directory
+  let handle: FileHandle
+  for (;;) {
+    try {
+      handle = await openVerifiedDirectory(existing, displayPath)
+      break
+    } catch (error: unknown) {
+      /* v8 ignore next -- non-ENOENT open failures surface immediately; the walk only retries a missing ancestor. */
+      if (!isENOENT(error)) throw error
+      const parent = dirname(existing)
+      /* v8 ignore next -- the filesystem root always opens, so the walk terminates before parent === existing. */
+      if (parent === existing) throw error
+      missing.unshift(basename(existing))
+      existing = parent
+    }
+  }
+  let currentPath = existing
+  try {
+    for (const name of missing) {
+      throwIfAborted(signal, 'write')
+      try {
+        await mkdir(`${descriptorPath(handle.fd)}/${name}`)
+      } catch (error: unknown) {
+        // Two writers may race to create the same intermediate directory; the
+        // pinned open below is what proves the child is a real directory.
+        if (!isEEXIST(error)) throw error
+      }
+      const child = await openVerifiedChildDirectory(handle, currentPath, name, displayPath)
+      await handle.close()
+      handle = child
+      currentPath = join(currentPath, name)
+    }
+  } catch (error: unknown) {
+    await handle.close()
+    throw error
+  }
+  const pinned = handle
+  return { path: descriptorPath(pinned.fd), directory: currentPath, close: () => pinned.close() }
 }
 
 // --- Writing ---

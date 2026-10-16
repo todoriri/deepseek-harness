@@ -8,10 +8,10 @@ import { Context } from '@deepseek-ai/cordis'
 import { constants as bufferConstants } from 'node:buffer'
 import { once } from 'node:events'
 import { watch } from 'chokidar'
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import z from '@deepseek-ai/schemastery'
-import { FileSystem, FsError, FsVersion } from '@deepseek-ai/dsh-fs'
+import { FileSystem, FsError, FsTargetKey, FsVersion } from '@deepseek-ai/dsh-fs'
 import type {
   FsDirEntry,
   FsEditOutcome,
@@ -24,9 +24,14 @@ import type {
 } from '@deepseek-ai/dsh-fs'
 import {
   applyLiteralEdit,
+  descriptorPath,
+  FD_PINNING_AVAILABLE,
   listDirectory,
   localDisplayPath,
   normalizeLineEndings,
+  openVerifiedChildFile,
+  openVerifiedFile,
+  pinDirectory,
   probe,
   probeNoFollow,
   readForEdit,
@@ -39,7 +44,14 @@ import {
   streamWholeText,
   writeFileAtomic,
 } from './fsio.ts'
-import type { FsIoInternals } from './fsio.ts'
+import type { FsIoInternals, LocalTarget, PinnedDirectory } from './fsio.ts'
+
+/**
+ * Re-exported so a backend that turns the descriptor pinning on (the sandboxing
+ * subclass) and the specs that assert the platform fact read the SAME constant
+ * the read/mutation paths consult.
+ */
+export { FD_PINNING_AVAILABLE } from './fsio.ts'
 
 /** Configuration for the local filesystem backend. */
 export interface Config {
@@ -104,6 +116,26 @@ export class LocalFileSystem extends FileSystem {
   readonly config: ResolvedConfig
   /** Test hook forwarded to fsio for atomic-publication boundaries. */
   internals: FsIoInternals = {}
+  /**
+   * Descriptor-level verification of the content-bearing opens, OFF by default.
+   *
+   * When on, a read opens the resolved canonical target, verifies that the path the
+   * kernel reports for the descriptor IS that canonical path, and serves the bytes
+   * from the descriptor — so a symlink swapped into the path after the caller's
+   * resolution fails the open instead of redirecting it. A mutation pins the
+   * destination directory the same way (creating missing intermediates relative to
+   * the pinned parent) and stages, publishes and cleans up through the descriptor.
+   * The bare backend keeps its historical check-then-open behaviour; a backend
+   * that fences MODEL-CONTROLLED paths (`@deepseek-ai/dsh-fs-sandbox`, whose
+   * containment check is exactly a resolve-then-open window) turns it on. It needs
+   * `/proc/self/fd` ({@link FD_PINNING_AVAILABLE}); where that is missing the flag
+   * is inert rather than a silent claim of verification.
+   */
+  protected verifyOpens = false
+  /** Whether descriptor verification is actually in force on this host (see {@link verifyOpens}). */
+  get descriptorVerified(): boolean {
+    return this.verifyOpens && FD_PINNING_AVAILABLE
+  }
   /** Per-targetKey tail promise: serializes mutating ops so the read→guard→write
    * window can't interleave, making concurrent writes/edits deterministically
    * ordered (one wins, the rest see the new version and reject as stale). */
@@ -178,24 +210,124 @@ export class LocalFileSystem extends FileSystem {
     return { version: info.version, type: info.type, size: info.size }
   }
 
-  override async readText(target: FsTarget, signal?: AbortSignal): Promise<string> {
-    return readWholeText({ displayPath: target.displayPath, targetKey: target.targetKey }, signal)
+  /**
+   * Open `target` and return a descriptor-pinned view of it, or `undefined` when
+   * descriptor verification is off. The display path is kept for messages; the
+   * target key becomes the descriptor's `/proc/self/fd` alias, so every content
+   * operation resolves against what was verified rather than the path.
+   */
+  private async verifiedReadTarget(
+    target: FsTarget,
+    signal?: AbortSignal,
+  ): Promise<{ target: LocalTarget; close: () => Promise<void> } | undefined> {
+    if (!this.descriptorVerified) return undefined
+    const handle = await openVerifiedFile({ displayPath: target.displayPath, targetKey: target.targetKey }, signal)
+    return {
+      target: { displayPath: target.displayPath, targetKey: FsTargetKey(descriptorPath(handle.fd)) },
+      close: () => handle.close(),
+    }
   }
 
-  override streamText(target: FsTarget, signal?: AbortSignal): Promise<AsyncIterable<string>> {
-    return Promise.resolve(streamWholeText({ displayPath: target.displayPath, targetKey: target.targetKey }, signal))
+  /** Pin the mutation's destination directory, or `undefined` when descriptor verification is off. */
+  private async pinnedDestination(target: FsTarget, signal?: AbortSignal): Promise<PinnedDirectory | undefined> {
+    if (!this.descriptorVerified) return undefined
+    return pinDirectory(dirname(target.targetKey), target.displayPath, signal)
+  }
+
+  /** The path a mutation must use: through the pinned descriptor when present, else the resolved target key. */
+  private destinationPath(target: FsTarget, pinned: PinnedDirectory | undefined): string {
+    return pinned ? join(pinned.path, basename(target.targetKey)) : target.targetKey
+  }
+
+  /**
+   * The overwrite diff basis, read through the verified descriptor when pinning is
+   * on. A file deleted after the caller's preflight costs only the optional basis
+   * (the verified helper's `FS_NOT_FOUND` becomes `null`); an identity refusal is
+   * the swap this closes and fails the write.
+   */
+  private async readDiffBasis(target: FsTarget, pinned: PinnedDirectory | undefined, signal?: AbortSignal): Promise<string | null> {
+    if (!pinned) return readTextForDiff(target.targetKey, this.config.diffBasisMaxBytes, signal)
+    let handle: Awaited<ReturnType<typeof openVerifiedChildFile>>
+    try {
+      handle = await openVerifiedChildFile(pinned, basename(target.targetKey), target.displayPath, 'read', signal)
+    } catch (error: unknown) {
+      if (error instanceof FsError && error.code === 'FS_NOT_FOUND') return null
+      throw error
+    }
+    try {
+      return await readTextForDiff(descriptorPath(handle.fd), this.config.diffBasisMaxBytes, signal)
+    } finally {
+      await handle.close()
+    }
+  }
+
+  /** Read a file for editing through the verified descriptor when pinning is on. */
+  private async readTargetForEdit(target: FsTarget, pinned: PinnedDirectory | undefined, signal?: AbortSignal) {
+    if (!pinned) return readForEdit(target.targetKey, target.displayPath, signal)
+    const handle = await openVerifiedChildFile(pinned, basename(target.targetKey), target.displayPath, 'edit', signal)
+    try {
+      return await readForEdit(descriptorPath(handle.fd), target.displayPath, signal)
+    } finally {
+      await handle.close()
+    }
+  }
+
+  override async readText(target: FsTarget, signal?: AbortSignal): Promise<string> {
+    const pinned = await this.verifiedReadTarget(target, signal)
+    if (!pinned) return readWholeText({ displayPath: target.displayPath, targetKey: target.targetKey }, signal)
+    try {
+      return await readWholeText(pinned.target, signal)
+    } finally {
+      await pinned.close()
+    }
+  }
+
+  override async streamText(target: FsTarget, signal?: AbortSignal): Promise<AsyncIterable<string>> {
+    const pinned = await this.verifiedReadTarget(target, signal)
+    if (!pinned) return Promise.resolve(streamWholeText({ displayPath: target.displayPath, targetKey: target.targetKey }, signal))
+    const inner = streamWholeText(pinned.target, signal)
+    // The verified descriptor stays open until the consumer finishes (or abandons)
+    // the stream; `for await` calls `return()`, so the finally runs on an early exit.
+    return (async function* () {
+      try {
+        yield* inner
+      } finally {
+        await pinned.close()
+      }
+    })()
   }
 
   override async readBytes(target: FsTarget, signal: AbortSignal | undefined, maxBytes: number): Promise<Uint8Array> {
-    return readWholeBytes({ displayPath: target.displayPath, targetKey: target.targetKey }, signal, maxBytes, this.internals)
+    const pinned = await this.verifiedReadTarget(target, signal)
+    if (!pinned) return readWholeBytes({ displayPath: target.displayPath, targetKey: target.targetKey }, signal, maxBytes, this.internals)
+    try {
+      return await readWholeBytes(pinned.target, signal, maxBytes, this.internals)
+    } finally {
+      await pinned.close()
+    }
   }
 
   override async readByteRange(target: FsTarget, range: { offset: number; length: number }, signal?: AbortSignal): Promise<Uint8Array> {
-    return readByteWindow({ displayPath: target.displayPath, targetKey: target.targetKey }, range, signal)
+    const pinned = await this.verifiedReadTarget(target, signal)
+    if (!pinned) return readByteWindow({ displayPath: target.displayPath, targetKey: target.targetKey }, range, signal)
+    try {
+      return await readByteWindow(pinned.target, range, signal)
+    } finally {
+      await pinned.close()
+    }
   }
 
   override async listDir(target: FsTarget, signal?: AbortSignal): Promise<FsDirEntry[]> {
-    const entries = await listDirectory({ displayPath: target.displayPath, targetKey: target.targetKey }, signal)
+    const pinned = await this.verifiedReadTarget(target, signal)
+    const entries = pinned
+      ? await (async () => {
+        try {
+          return await listDirectory(pinned.target, signal)
+        } finally {
+          await pinned.close()
+        }
+      })()
+      : await listDirectory({ displayPath: target.displayPath, targetKey: target.targetKey }, signal)
     return entries.map(entry => ({
       name: entry.name,
       type: entry.type,
@@ -236,26 +368,32 @@ export class LocalFileSystem extends FileSystem {
       // `before: null`; consumers retain their whole-file fallback.
       const diffable = existing !== null
         && Buffer.byteLength(content, 'utf8') < this.config.diffBasisMaxBytes
-      const before = diffable
-        ? await readTextForDiff(target.targetKey, this.config.diffBasisMaxBytes, signal)
-        : null
-      await writeFileAtomic(
-        target.targetKey,
-        content,
-        existing?.mode,
-        signal,
-        this.internals,
-        expected?.kind === 'createIfAbsent' ? { displayPath: target.displayPath } : undefined,
-      )
-      const after = await probe(target.targetKey)
-      return {
-        operation: existing ? 'update' : 'create',
-        version: this.versionAfterWrite(after, target),
-        before,
-        // LF-normalized to share the diff basis with `before` (also LF): a CRLF
-        // overwrite must not read as every line changed. Line-ending restoration
-        // is a storage detail the applied-hunk diff ignores.
-        after: normalizeLineEndings(content),
+      const pinned = await this.pinnedDestination(target, signal)
+      const writePath = this.destinationPath(target, pinned)
+      try {
+        // The diff basis is read through the SAME verified destination the write
+        // uses, so a swapped component can never supply the before-text.
+        const before = diffable ? await this.readDiffBasis(target, pinned, signal) : null
+        await writeFileAtomic(
+          writePath,
+          content,
+          existing?.mode,
+          signal,
+          this.internals,
+          expected?.kind === 'createIfAbsent' ? { displayPath: target.displayPath } : undefined,
+        )
+        const after = await probe(writePath)
+        return {
+          operation: existing ? 'update' : 'create',
+          version: this.versionAfterWrite(after, target),
+          before,
+          // LF-normalized to share the diff basis with `before` (also LF): a CRLF
+          // overwrite must not read as every line changed. Line-ending restoration
+          // is a storage detail the applied-hunk diff ignores.
+          after: normalizeLineEndings(content),
+        }
+      } finally {
+        await pinned?.close()
       }
     })
   }
@@ -280,18 +418,26 @@ export class LocalFileSystem extends FileSystem {
         throw new FsError(`cannot edit "${target.displayPath}": file changed since it was read`, 'FS_STALE_VERSION')
       }
 
-      const original = await readForEdit(target.targetKey, target.displayPath, signal)
-      const edited = applyLiteralEdit(original.content, edit.oldString, edit.newString, edit.replaceAll, target.displayPath)
-      const content = restoreLineEndings(edited.content, original.lineEndings)
-      await writeFileAtomic(target.targetKey, content, existing.mode, signal, this.internals)
+      const pinned = await this.pinnedDestination(target, signal)
+      const writePath = this.destinationPath(target, pinned)
+      try {
+        // Read and write through the SAME verified destination: the literal match
+        // applies to the pinned file, never to a swapped one.
+        const original = await this.readTargetForEdit(target, pinned, signal)
+        const edited = applyLiteralEdit(original.content, edit.oldString, edit.newString, edit.replaceAll, target.displayPath)
+        const content = restoreLineEndings(edited.content, original.lineEndings)
+        await writeFileAtomic(writePath, content, existing.mode, signal, this.internals)
 
-      const after = await probe(target.targetKey)
-      return {
-        version: this.versionAfterWrite(after, target),
-        // The LF-normalized before/after text (the applied-hunk diff basis);
-        // line-ending restoration is a storage detail the diff ignores.
-        before: original.content,
-        after: edited.content,
+        const after = await probe(writePath)
+        return {
+          version: this.versionAfterWrite(after, target),
+          // The LF-normalized before/after text (the applied-hunk diff basis);
+          // line-ending restoration is a storage detail the diff ignores.
+          before: original.content,
+          after: edited.content,
+        }
+      } finally {
+        await pinned?.close()
       }
     })
   }

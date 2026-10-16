@@ -77,15 +77,15 @@ The fence is a policy check in trusted code over a model-controlled path — not
 
 ### How a mutation is fenced
 
-Each mutation resolves the per-call policy (`danger-full-access` returns the caller's target untouched; `read-only` throws `FS_SANDBOX_DENIED`), then for `workspace-write` re-canonicalizes the target immediately and requires containment under one of the writable roots derived from the single `writableRoots` function — the same set the Seatbelt profile grants, so the fs fence and the bash runner cannot drift. The fresh target is the one mutated, so a symlink ancestor swapped since the tool resolved it is caught.
+Each mutation resolves the per-call policy (`danger-full-access` returns the caller's target untouched; `read-only` throws `FS_SANDBOX_DENIED`), then for `workspace-write` re-canonicalizes the target immediately and requires containment under one of the writable roots derived from the single `writableRoots` function — the same set the Seatbelt profile grants, so the fs fence and the bash runner cannot drift. The fresh target is the one mutated, so a symlink ancestor swapped since the tool resolved it is caught. The mutation then pins the destination directory by DESCRIPTOR (`fs-local`'s `verifyOpens`, which this backend enables): the staging directory, its file and the publication rename all go through `/proc/self/fd/<dirfd>/…`, so a component swapped after this containment check cannot redirect the write either.
 
 ### How a read is fenced
 
-Only when `fenceReads` is enabled, and only under `workspace-write`: the guard re-canonicalizes the target through the same `resolve` the mutations use, requires containment under the same `writableRoots` set, and hands THAT fresh target to the inherited read — so a symlink ancestor swapped since the tool resolved the target is caught, and the identity checked is the one read. The check runs before any content is produced, so a denied stream yields nothing rather than a prefix.
+Only when `fenceReads` is enabled, and only under `workspace-write`: the guard re-canonicalizes the target through the same `resolve` the mutations use, requires containment under the same `writableRoots` set, and hands THAT fresh target to the inherited read — so a symlink ancestor swapped since the tool resolved the target is caught. That read then opens FIRST and verifies that the path the kernel reports for the descriptor IS the resolved target before any byte is returned, and serves the bytes from that descriptor: a swap landing between the containment check and the open therefore fails instead of escaping. This needs `/proc/self/fd` (Linux; Node exposes no `openat`), and on a host without it the inherited read is path-based again — only the resolve-then-open direction above stands, which the backend reports rather than hides. The check runs before any content is produced, so a denied stream yields nothing rather than a prefix.
 
 ### Threat model
 
-The residual resolve-to-syscall TOCTOU is narrowed by re-canonicalizing immediately before the write and is accepted for this threat model; a kernel-tight boundary would need `openat2`-class primitives whose portability cost is not worth it here. A denial is a structured `FsError`, not stderr inference — an in-process fence knows exactly what it refused.
+On Linux the resolve-to-syscall window is closed by DESCRIPTOR PINNING: a read opens first and verifies the descriptor it opened against the resolved target, and a mutation pins the destination directory, so a symlink a confined worker swaps into the path no longer redirects either operation. Where `/proc/self/fd` is unavailable (Node exposes no `openat`), those primitives are inert and the window remains — the backend reports that platform fact rather than hiding it. A denial is a structured `FsError`, not stderr inference — an in-process fence knows exactly what it refused.
 
 </details>
 
@@ -129,7 +129,7 @@ A standing-policy change appends an owner-rendered superseding runtime-context s
 
 These limits define when the sandbox backend is a poor fit or needs special operational care. They are current package constraints, not a general sandbox comparison or a task backlog.
 
-- **A policy fence, not a kernel boundary** — the check is trusted code over a model-controlled path, so the residual resolve-to-syscall TOCTOU is narrowed (by the in-place re-canonicalization) but not eliminated; adversarial host processes are out of scope. Kernel-grade isolation of untrusted code stays `ctx.shell`'s.
+- **A policy fence, not a kernel boundary** — the check is trusted code over a model-controlled path. On Linux descriptor pinning closes the resolve-to-syscall window for the fence's own operations; on a host without `/proc/self/fd` that window remains, and adversarial host processes are out of scope either way. Kernel-grade isolation of untrusted code stays `ctx.shell`'s.
 - **Fence-vs-runner parity is derived from one owner** — the writable set comes from `writableRoots`, shared with the Seatbelt profile; a runner profile that defines its writable set elsewhere would drift.
 - **Requires `ctx.sandboxPolicy`** — tools use it to resolve each session policy and the backend uses it for agentless-call fallbacks; the backend does not confine without it composed.
 

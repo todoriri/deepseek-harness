@@ -11,7 +11,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, parse } from 'node:path'
@@ -318,6 +318,37 @@ describe('registration and HMR safety', () => {
     // Re-mount below the disposed one to prove no lingering registration.
     fiber = await ctx.plugin(SandboxedFileSystem, { cwd: workspace })
     expect(ctx.fs).toBeInstanceOf(SandboxedFileSystem)
+  })
+})
+
+describe('descriptor verification (review.16.10 F1, D132)', () => {
+  beforeEach(() => boot('workspace-write', { fenceReads: true }))
+
+  it('reports the descriptor fact (Linux has /proc/self/fd; elsewhere the fence stays path-based)', () => {
+    expect(fs.descriptorVerified).toBe(process.platform === 'linux')
+  })
+
+  it.runIf(process.platform === 'linux')('refuses a read whose directory component became a symlink AFTER the target was resolved, returning no outside content', async () => {
+    await writeFile(join(outside, 'secret.txt'), 'operator-secret')
+    await mkdir(join(workspace, 'd'))
+    await writeFile(join(workspace, 'd', 'f'), 'decoy')
+    // Resolve while `d` is real, then swap it for a symlink: the resolve-to-open
+    // window this closes. The fence re-resolves first, so the refusal may come
+    // from the containment check OR the descriptor identity — either way no
+    // outside byte is returned.
+    const stale = await target(join(workspace, 'd', 'f'))
+    await rename(join(workspace, 'd'), join(workspace, 'd-real'))
+    await symlink(outside, join(workspace, 'd'))
+    await expect(fs.readText(stale)).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+  })
+
+  it.runIf(process.platform === 'linux')('refuses a write whose destination directory became a symlink AFTER resolve, creating nothing outside', async () => {
+    await mkdir(join(workspace, 'd'))
+    const stale = await target(join(workspace, 'd', 'w.txt'))
+    await rename(join(workspace, 'd'), join(workspace, 'd-real'))
+    await symlink(outside, join(workspace, 'd'))
+    await expect(fs.writeText(stale, 'x')).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    expect(existsSync(join(outside, 'w.txt'))).toBe(false)
   })
 })
 

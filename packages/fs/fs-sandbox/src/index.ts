@@ -16,10 +16,19 @@
  * and only the target path is untrusted, so canonicalize-then-contain is the
  * complete answer to this surface. This is containment, not a security
  * boundary; kernel-grade isolation of untrusted CODE stays `ctx.shell`'s job
- * (`@deepseek-ai/dsh-bash-sandbox`). The residual
- * TOCTOU (an ancestor symlink swapped between the containment re-check and the
- * syscall) is narrowed by re-canonicalizing immediately before delegating and
- * is accepted for this threat model.
+ * (`@deepseek-ai/dsh-bash-sandbox`).
+ *
+ * A canonicalize-then-contain check is only as good as the identity the kernel
+ * ACTUALLY opened, so this backend also turns on the local backend's
+ * descriptor-level verification (`verifyOpens`): a read opens the canonical
+ * target, verifies that the descriptor's reported path IS that target, and serves
+ * the bytes from the descriptor; a mutation pins the destination directory by
+ * descriptor and stages/publishes through it. A symlink swapped into the path
+ * after the containment check therefore fails the operation instead of escaping
+ * the fence. That primitive needs `/proc/self/fd`
+ * (`dsh-fs-local`'s `FD_PINNING_AVAILABLE`); on a host without it verification is
+ * inert and this fence keeps its resolve-then-open window — see the README's
+ * "not verified" note.
  *
  * Per-call policy: `read-only` denies every mutation; `workspace-write` allows
  * a mutation only when the target canonicalizes under the policy's workspace
@@ -104,6 +113,11 @@ export class SandboxedFileSystem extends LocalFileSystem {
     super(ctx, config)
     this.defaultMode = ctx.sandboxPolicy.defaultMode
     this.fenceReads = config.fenceReads === true
+    // The containment check is a resolve-then-open window over a path a model can
+    // swap; verify the descriptor the kernel opened, in every mode. It is a
+    // NARROWING, never a grant: a stable permitted path is unaffected, and only an
+    // operation whose opened identity differs from the resolved one is refused.
+    this.verifyOpens = true
   }
 
   /** The deployment default mode — the capability fact the tool layer reads to advertise escalation. */
@@ -224,10 +238,14 @@ export class SandboxedFileSystem extends LocalFileSystem {
    *
    * The check re-canonicalizes the target NOW (`resolve` realpaths the deepest
    * existing ancestor, so a symlink swapped since the tool resolved the target is
-   * seen) and hands the fresh target to the inherited read, so the identity
-   * checked is the one read — the same anti-TOCTOU direction as
-   * {@link checkedTarget}. Metadata reads (`stat`, `lstat`) are deliberately NOT
-   * fenced: they expose existence and size, never content.
+   * seen) and hands the fresh target to the inherited read. That read then opens
+   * first and verifies the descriptor it opened against this same canonical target
+   * before any byte is returned (the local backend's `verifyOpens`, enabled in this
+   * class), so on a host with `/proc/self/fd` the identity checked IS the one read.
+   * Where that primitive is unavailable the inherited read is path-based again and
+   * only the resolve-then-open direction above remains — the same anti-TOCTOU
+   * direction as {@link checkedTarget}. Metadata reads (`stat`, `lstat`) are
+   * deliberately NOT fenced: they expose existence and size, never content.
    */
   private async checkedRead(target: FsTarget, sandboxPolicy?: SandboxExecutionPolicy): Promise<FsTarget> {
     if (!this.fenceReads) return target
@@ -255,9 +273,11 @@ export class SandboxedFileSystem extends LocalFileSystem {
    * re-canonicalizes NOW (`resolve` realpaths the deepest existing ancestor,
    * reflecting a concurrently swapped symlink), requires containment under a
    * writable root, and returns THAT fresh target; `danger-full-access` returns
-   * the caller's target unfenced. Throws the structured `FS_SANDBOX_DENIED` on
-   * refusal — the tool layer maps it to the model-facing `[sandbox: …]` marker
-   * and the escalation hint.
+   * the caller's target unfenced. The mutation then pins the destination directory
+   * by descriptor (`verifyOpens`) and stages/publishes through it, so a component
+   * swapped after this check cannot redirect the write either. Throws the
+   * structured `FS_SANDBOX_DENIED` on refusal — the tool layer maps it to the
+   * model-facing `[sandbox: …]` marker and the escalation hint.
    */
   private async checkedTarget(target: FsTarget, sandboxPolicy?: SandboxExecutionPolicy): Promise<FsTarget> {
     const policy = sandboxPolicy ?? this.ctx.sandboxPolicy.resolve()
