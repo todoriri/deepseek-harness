@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -95,18 +95,21 @@ describe.skipIf(!seatbeltUsable)('sandbox-local: real Seatbelt confinement throu
     expect(existsSync(join(outside, 'denied.txt'))).toBe(false)
   })
 
-  it('workspace-write grants /tmp and the user temp dir (the documented Seatbelt-profile temp areas)', async () => {
+  it('workspace-write grants the platform temp dir — and the literal /tmp exactly when os.tmpdir() IS /tmp (D134)', async () => {
     const workdir = await tempDir(homedir())
     const hostTmp = await tempDir('/tmp')
     const userTmp = await tempDir(tmpdir())
+    const tmpIsHostTmp = realpathSync.native(tmpdir()) === realpathSync.native('/tmp')
     const sandbox = await provider()
-    const { result } = await runConfined(
-      sandbox,
-      `printf tmp-ok > ${hostTmp}/scratch.txt && printf user-tmp-ok > ${userTmp}/scratch.txt`,
-      { mode: 'workspace-write', workspaceRoot: workdir },
-    )
+    // The shared `writableRoots` helper grants the caller's own temp dir and no longer grants the
+    // literal `/tmp` on its own (review.16.10 F2 / D134): on darwin `os.tmpdir()` is the per-user
+    // folder, so only that grant is asserted there; on a host where the two coincide, both are.
+    const script = tmpIsHostTmp
+      ? `printf tmp-ok > ${hostTmp}/scratch.txt && printf user-tmp-ok > ${userTmp}/scratch.txt`
+      : `printf user-tmp-ok > ${userTmp}/scratch.txt`
+    const { result } = await runConfined(sandbox, script, { mode: 'workspace-write', workspaceRoot: workdir })
     expect(result.status).toBe(0)
-    expect(readFileSync(join(hostTmp, 'scratch.txt'), 'utf8')).toBe('tmp-ok')
+    if (tmpIsHostTmp) expect(readFileSync(join(hostTmp, 'scratch.txt'), 'utf8')).toBe('tmp-ok')
     expect(readFileSync(join(userTmp, 'scratch.txt'), 'utf8')).toBe('user-tmp-ok')
   })
 })

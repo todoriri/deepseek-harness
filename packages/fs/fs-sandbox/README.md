@@ -46,7 +46,7 @@ Alongside the local backend's knobs (`cwd` resolution default and `diffBasisMaxB
 
 ### How the fence behaves
 
-The effective mode comes from the calling session's override or escalation grant, falling back to the deployment default when neither is in force. `read-only` denies every mutation with the structured `FS_SANDBOX_DENIED`. `workspace-write` allows a mutation only when the target canonicalizes under the workspace root or a platform temp area (`/tmp`, `os.tmpdir()`) — the same writable set the Seatbelt profile grants. `danger-full-access` delegates unfenced.
+The effective mode comes from the calling session's override or escalation grant, falling back to the deployment default when neither is in force. `read-only` denies every mutation with the structured `FS_SANDBOX_DENIED`. `workspace-write` allows a mutation only when the target canonicalizes under the workspace root or the platform temp dir (`os.tmpdir()`, which honours `TMPDIR`; the literal `/tmp` is a root exactly when it resolves to the same directory) — the same writable set the Seatbelt profile grants (review.16.10 F2, D134). `danger-full-access` delegates unfenced.
 
 With `fenceReads: true`, the content-bearing reads (`readText`, `streamText`, `readBytes`, `readByteRange`, `listDir`) follow that same policy under `workspace-write`. The option only ever NARROWS: `read-only` and `danger-full-access` keep permitting every read, so enabling it cannot grant access a session did not already have. Metadata reads (`stat`, `lstat`) stay unfenced — they expose existence and size, never content.
 

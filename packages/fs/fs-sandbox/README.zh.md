@@ -46,7 +46,7 @@ kind: "package-reference"
 
 ### 围栏行为
 
-有效模式来自调用会话的覆盖值或升级授权，两者都未生效时才回退到部署默认值。`read-only` 以结构化 `FS_SANDBOX_DENIED` 拒绝所有变更。`workspace-write` 只允许目标规范化后位于工作区根目录或平台临时区域（`/tmp`、`os.tmpdir()`）之下的变更——与 Seatbelt profile 授权的可写集合相同。`danger-full-access` 不加围栏直接委托。
+有效模式来自调用会话的覆盖值或升级授权，两者都未生效时才回退到部署默认值。`read-only` 以结构化 `FS_SANDBOX_DENIED` 拒绝所有变更。`workspace-write` 只允许目标规范化后位于工作区根目录或平台临时目录（`os.tmpdir()`，遵循 `TMPDIR`；字面量 `/tmp` 只有在解析到同一目录时才是根目录）之下的变更——与 Seatbelt profile 授权的可写集合相同（review.16.10 F2，D134）。`danger-full-access` 不加围栏直接委托。
 
 当 `fenceReads: true` 时，承载内容的读取（`readText`、`streamText`、`readBytes`、`readByteRange`、`listDir`）在 `workspace-write` 下遵循同一策略。该选项只会收窄：`read-only` 与 `danger-full-access` 仍允许所有读取，因此启用它不可能授予会话原本没有的访问权。元数据读取（`stat`、`lstat`）保持不受围栏——它们只暴露存在性与大小，绝不暴露内容。
 

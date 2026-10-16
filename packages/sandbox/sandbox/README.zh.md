@@ -100,7 +100,7 @@ kind: "package-reference"
 
 ### 可写根目录
 
-`workspace-write` 意味着「工作区根目录加宿主临时区域」：`writableRoots` 以规范化方式推导该白名单，解析符号链接并去重，使 Seatbelt profile 与进程内 fs 栅栏授予完全相同的根目录。
+`workspace-write` 意味着「工作区根目录加平台临时目录（`os.tmpdir()`）」：`writableRoots` 以规范化方式推导该白名单，解析符号链接并去重，使 Seatbelt profile 与进程内 fs 栅栏授予完全相同的根目录。字面量 `/tmp` 只有在 `os.tmpdir()` 解析到它时才是根目录——Linux 默认即如此；会话若用 `TMPDIR` 迁移临时目录，`/tmp` 便离开可写集合（review.16.10 F2，D134）。
 
 </details>
 

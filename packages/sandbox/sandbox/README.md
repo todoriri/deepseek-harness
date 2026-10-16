@@ -100,7 +100,7 @@ The ladder is a closed table — `read-only` may escalate to `workspace-write` o
 
 ### Writable roots
 
-`workspace-write` means "the workspace root plus the host temp areas": `writableRoots` derives that allow-list canonically, resolving symlinks and deduplicating, so the Seatbelt profile and the in-process fs fence grant exactly the same roots.
+`workspace-write` means "the workspace root plus the platform temp dir (`os.tmpdir()`)": `writableRoots` derives that allow-list canonically, resolving symlinks and deduplicating, so the Seatbelt profile and the in-process fs fence grant exactly the same roots. The literal `/tmp` is a root exactly when `os.tmpdir()` resolves to it — on the Linux default it does, and a session that relocates its temp dir with `TMPDIR` takes `/tmp` out of the writable set (review.16.10 F2, D134).
 
 </details>
 

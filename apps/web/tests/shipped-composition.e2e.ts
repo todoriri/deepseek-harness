@@ -609,12 +609,17 @@ it('assembles the shipped Web transport, catalog, guidance, and defaults', async
     await handle.dispose()
   }
   // `workspace-write` is not "the workspace and nothing else": the shared roots
-  // helper always admits the temp directories too. Pinning it against an
+  // helper always admits the caller's platform temp dir too. Pinning it against an
   // explicit mode keeps the claim independent of this surface's default, and
-  // keeps a future sandbox-confinement test from being run inside /tmp — where an
-  // "escape" write succeeds by design and reads as a sandbox failure.
+  // keeps a future sandbox-confinement test from being run inside a temp dir —
+  // where an "escape" write succeeds by design and reads as a sandbox failure.
+  // The literal `/tmp` is granted only where `os.tmpdir()` IS `/tmp`
+  // (review.16.10 F2 / D134), so the assertion follows the same rule.
+  const expectedTempRoot = canonicalPath(tmpdir())
   expect(writableRoots(scaffold.ctx.sandboxPolicy.resolve({ mode: 'workspace-write' }))).toEqual(
-    expect.arrayContaining([canonicalPath('/tmp'), canonicalPath(tmpdir())]),
+    expect.arrayContaining(expectedTempRoot === canonicalPath('/tmp')
+      ? [canonicalPath('/tmp')]
+      : [canonicalPath(tmpdir())]),
   )
   expect(scaffold.ctx.sandboxPolicy.defaultMode).toBe('workspace-write')
   expect(scaffold.ctx.approval.config.policy).toBe('ask')

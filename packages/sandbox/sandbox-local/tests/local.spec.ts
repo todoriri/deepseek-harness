@@ -97,17 +97,17 @@ describe('profile dialects', () => {
     ])
   })
 
-  it('bwrap workspace-write: adds an ephemeral /tmp and rebinds the workspace root', () => {
+  it('bwrap workspace-write: adds an ephemeral /tmp, points TMPDIR at it, and rebinds the workspace root', () => {
     expect(bwrapProfileArgs(WW)).toEqual([
       '--ro-bind', '/', '/', '--dev', '/dev', '--unshare-pid', '--proc', '/proc', '--die-with-parent',
       '--tmpfs', '/run', '--unshare-ipc', '--new-session', '--cap-drop', 'ALL',
-      '--tmpfs', '/tmp', '--bind', '/ws', '/ws',
+      '--tmpfs', '/tmp', '--setenv', 'TMPDIR', '/tmp', '--bind', '/ws', '/ws',
     ])
   })
 
   it('bwrap network "none": --unshare-net follows the socket hardening and precedes the mode mounts', () => {
     expect(bwrapProfileArgs(RO, NO_NETWORK)).toEqual([...BWRAP_BASE, '--unshare-net'])
-    expect(bwrapProfileArgs(WW, NO_NETWORK)).toEqual([...BWRAP_BASE, '--unshare-net', '--tmpfs', '/tmp', '--bind', '/ws', '/ws'])
+    expect(bwrapProfileArgs(WW, NO_NETWORK)).toEqual([...BWRAP_BASE, '--unshare-net', '--tmpfs', '/tmp', '--setenv', 'TMPDIR', '/tmp', '--bind', '/ws', '/ws'])
   })
 
   it('bwrap hidePaths/exposeReadOnly: masks, then exposures, then the mode mounts, and the masks turn read-only LAST', () => {
@@ -117,7 +117,7 @@ describe('profile dialects', () => {
     ])
     expect(bwrapProfileArgs(WW, masked)).toEqual([
       ...BWRAP_BASE, '--unshare-net', '--tmpfs', '/h', '--ro-bind', '/h/keep', '/h/keep',
-      '--tmpfs', '/tmp', '--bind', '/ws', '/ws', '--remount-ro', '/h',
+      '--tmpfs', '/tmp', '--setenv', 'TMPDIR', '/tmp', '--bind', '/ws', '/ws', '--remount-ro', '/h',
     ])
   })
 
@@ -135,13 +135,14 @@ describe('profile dialects', () => {
     expect(seatbeltProfileArgs(RO)).toEqual(['-p', SEATBELT_RO_PROFILE])
   })
 
-  it('seatbelt workspace-write: one more allow for the canonicalized workspace root, /tmp, and the user temp dir', () => {
+  it('seatbelt workspace-write: one more allow for the canonicalized workspace root and the platform temp dir', () => {
     // `/ws` does not exist, so it is granted as spelled (the canonicalization
-    // fallback); `/tmp` and `os.tmpdir()` exist everywhere and are granted
-    // CANONICALIZED — Seatbelt matches resolved paths (`/tmp` IS
-    // `/private/tmp` on macOS), and both collapse to one grant on hosts
-    // where they resolve to the same directory.
-    const roots = [...new Set(['/ws', realpathSync('/tmp'), realpathSync(tmpdir())])]
+    // fallback); `os.tmpdir()` exists everywhere and is granted CANONICALIZED —
+    // Seatbelt matches resolved paths (`/tmp` IS `/private/tmp` on macOS). The
+    // literal `/tmp` is NOT granted on its own (review.16.10 F2 / D134): it is a
+    // root exactly when `os.tmpdir()` resolves to it, which the shared
+    // `writableRoots` helper decides, so the two grants cannot drift.
+    const roots = [...new Set(['/ws', realpathSync(tmpdir())])]
     const allow = `(allow file-write* ${roots.map(root => `(subpath "${root}")`).join(' ')})`
     expect(seatbeltProfileArgs(WW)).toEqual(['-p', `${SEATBELT_RO_PROFILE} ${allow}`])
   })

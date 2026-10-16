@@ -273,6 +273,30 @@ describe.skipIf(!bwrapUsable)('sandbox-local: real bwrap confinement', () => {
     expect(existsSync(join(outside, 'denied.txt'))).toBe(false)
   })
 
+  it('workspace-write rewrites an invisible host TMPDIR to the sandbox mount (review.16.10 F2, D134)', async () => {
+    // loopcc sets a private `TMPDIR` per run so the fence's temp root follows it. That directory is
+    // NOT mounted into bwrap, so the profile must hand confined code the temp area it actually has:
+    // without `--setenv TMPDIR /tmp` an mkstemp-family tool fails ENOENT on an invisible TMPDIR.
+    const workdir = await tempDir(homedir())
+    const invisible = join(homedir(), `dsh-bwrap-e2e-invisible-${process.pid}`)
+    const prior = process.env.TMPDIR
+    process.env.TMPDIR = invisible
+    try {
+      const sandbox = await provider()
+      const { result } = await runConfined(
+        sandbox,
+        'printf "%s" "$TMPDIR" && printf tmp-ok > "$TMPDIR/scratch.txt" && cat "$TMPDIR/scratch.txt"',
+        { mode: 'workspace-write', workspaceRoot: workdir },
+      )
+      expect(result.status).toBe(0)
+      expect(result.stdout).toBe('/tmp' + 'tmp-ok')
+      expect(existsSync(invisible)).toBe(false)
+    } finally {
+      if (prior === undefined) delete process.env.TMPDIR
+      else process.env.TMPDIR = prior
+    }
+  })
+
   it('workspace-write mounts an EPHEMERAL /tmp: the write succeeds inside, the host /tmp stays untouched', async () => {
     // The documented bwrap-profile difference: Landlock and Seatbelt grant
     // the HOST temp areas, bwrap swaps in a fresh tmpfs that dies with the

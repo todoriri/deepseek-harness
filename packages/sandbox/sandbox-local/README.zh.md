@@ -101,7 +101,7 @@ kind: "package-reference"
 
 ### 平台 profile
 
-bwrap profile 组合只读宿主根目录、全新 `/dev` 与私有 PID 命名空间中的 `/proc`——命令可管理其后代，但看不到宿主进程，因此 procfs 魔法链接无法绕过挂载；`workspace-write` 另加临时的 `/tmp` 与可写工作区绑定挂载。[历史私有 PID 笔记](../../../.agents/notes/archived/bug-fix/2026-08-06-bwrap-private-pid-namespace.md)记录该边界。`network: none` 在套接字加固之后追加 `--unshare-net`，且 bwrap 探测运行的就是加固后的 profile，因此 bwrap 拒绝该标志的宿主会被判定为不可用，而不是让每条命令失败。每个 `hidePaths` 条目先以可写 tmpfs 挂载，以便 bwrap 在其下创建挂载点（`exposeReadOnly` 绑定与工作区绑定），最后再重新挂载为只读；该重新挂载不递归，因此遮蔽之下的工作区仍可写。
+bwrap profile 组合只读宿主根目录、全新 `/dev` 与私有 PID 命名空间中的 `/proc`——命令可管理其后代，但看不到宿主进程，因此 procfs 魔法链接无法绕过挂载；`workspace-write` 另加临时的 `/tmp`、把 `TMPDIR` 重写为该挂载点（`--setenv TMPDIR /tmp`，因此宿主 `TMPDIR` 若指向沙箱看不到的目录，绝不会被子命令继承——review.16.10 F2，D134），以及可写工作区绑定挂载。[历史私有 PID 笔记](../../../.agents/notes/archived/bug-fix/2026-08-06-bwrap-private-pid-namespace.md)记录该边界。`network: none` 在套接字加固之后追加 `--unshare-net`，且 bwrap 探测运行的就是加固后的 profile，因此 bwrap 拒绝该标志的宿主会被判定为不可用，而不是让每条命令失败。每个 `hidePaths` 条目先以可写 tmpfs 挂载，以便 bwrap 在其下创建挂载点（`exposeReadOnly` 绑定与工作区绑定），最后再重新挂载为只读；该重新挂载不递归，因此遮蔽之下的工作区仍可写。
 
 `@deepseek-ai/node-addon-system/landlock-run` API 提供平台 launcher、功能探测与授权词汇；此提供方只做模式到授权的映射，把路径解析与探测解析保留在带版本的 binary 中。
 

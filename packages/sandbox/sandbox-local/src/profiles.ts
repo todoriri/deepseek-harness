@@ -74,6 +74,11 @@ export function bwrapProfileArgs(policy: SandboxPolicy, hardening: BwrapHardenin
   for (const path of hardening.exposeReadOnly) args.push('--ro-bind', path, path)
   if (policy.mode === 'workspace-write') {
     args.push('--tmpfs', '/tmp')
+    // The mount above is the ONLY temp area this sandbox has, so confined code must not inherit a
+    // host `TMPDIR` naming a directory the sandbox cannot see (loopcc sets a private `TMPDIR` per
+    // run — review.16.10 F2, D134 — and an mkstemp-family tool with an invisible `TMPDIR` fails
+    // ENOENT). bwrap rewrites the variable for the child, so the mount and the variable agree.
+    args.push('--setenv', 'TMPDIR', '/tmp')
     args.push('--bind', policy.workspaceRoot, policy.workspaceRoot)
   }
   for (const path of hardening.hidePaths) args.push('--remount-ro', path)
