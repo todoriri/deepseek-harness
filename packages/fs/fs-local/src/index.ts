@@ -54,12 +54,12 @@ export interface Config {
 
 type ResolvedConfig = Required<Config>
 /**
- * Default and maximum `diffBasisMaxBytes`. Exported so a backend that EXTENDS
- * this one's config (`@deepseek-ai/dsh-fs-sandbox`, whose schema must add a
- * field without mutating this static) can carry the same bounds instead of
- * restating them.
+ * Default `diffBasisMaxBytes`. Exported so a backend that EXTENDS this one's
+ * config (`@deepseek-ai/dsh-fs-sandbox`, whose schema must add a field without
+ * mutating this static) can carry the same bounds instead of restating them.
  */
 export const DEFAULT_DIFF_BASIS_MAX_BYTES = 10 * 1024 * 1024
+/** Maximum `diffBasisMaxBytes`: the smaller of Node's Buffer and string length limits. */
 export const MAX_DIFF_BASIS_BYTES = Math.min(
   bufferConstants.MAX_LENGTH,
   bufferConstants.MAX_STRING_LENGTH,
