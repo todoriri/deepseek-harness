@@ -78,6 +78,19 @@ export const MAX_DIFF_BASIS_BYTES = Math.min(
 )
 
 /**
+ * Open `target` through the identity-verified helper and return a view of it
+ * whose target key is the descriptor's `/proc/self/fd` alias; the display path is
+ * kept for messages. The caller reads through the view and then closes it.
+ */
+async function pinReadTarget(target: FsTarget, signal?: AbortSignal): Promise<{ target: LocalTarget; close: () => Promise<void> }> {
+  const handle = await openVerifiedFile({ displayPath: target.displayPath, targetKey: target.targetKey }, signal)
+  return {
+    target: { displayPath: target.displayPath, targetKey: FsTargetKey(descriptorPath(handle.fd)) },
+    close: () => handle.close(),
+  }
+}
+
+/**
  * The host-filesystem backend. Reads resolve relative paths from {@link Config.cwd}
  * (a resolution default, NOT a containment boundary — see the filesystem
  * capability-seam Agent Note); enforce
@@ -211,21 +224,16 @@ export class LocalFileSystem extends FileSystem {
   }
 
   /**
-   * Open `target` and return a descriptor-pinned view of it, or `undefined` when
-   * descriptor verification is off. The display path is kept for messages; the
-   * target key becomes the descriptor's `/proc/self/fd` alias, so every content
-   * operation resolves against what was verified rather than the path.
+   * The descriptor-pinned view of `target` ({@link pinReadTarget}), or `undefined`
+   * when descriptor verification is off. Every content operation through the view
+   * resolves against what was verified rather than the path.
    */
   private async verifiedReadTarget(
     target: FsTarget,
     signal?: AbortSignal,
   ): Promise<{ target: LocalTarget; close: () => Promise<void> } | undefined> {
     if (!this.descriptorVerified) return undefined
-    const handle = await openVerifiedFile({ displayPath: target.displayPath, targetKey: target.targetKey }, signal)
-    return {
-      target: { displayPath: target.displayPath, targetKey: FsTargetKey(descriptorPath(handle.fd)) },
-      close: () => handle.close(),
-    }
+    return pinReadTarget(target, signal)
   }
 
   /** Pin the mutation's destination directory, or `undefined` when descriptor verification is off. */
@@ -282,19 +290,23 @@ export class LocalFileSystem extends FileSystem {
     }
   }
 
-  override async streamText(target: FsTarget, signal?: AbortSignal): Promise<AsyncIterable<string>> {
-    const pinned = await this.verifiedReadTarget(target, signal)
-    if (!pinned) return Promise.resolve(streamWholeText({ displayPath: target.displayPath, targetKey: target.targetKey }, signal))
-    const inner = streamWholeText(pinned.target, signal)
-    // The verified descriptor stays open until the consumer finishes (or abandons)
-    // the stream; `for await` calls `return()`, so the finally runs on an early exit.
-    return (async function* () {
+  override streamText(target: FsTarget, signal?: AbortSignal): Promise<AsyncIterable<string>> {
+    if (!this.descriptorVerified) {
+      return Promise.resolve(streamWholeText({ displayPath: target.displayPath, targetKey: target.targetKey }, signal))
+    }
+    // The verified open runs on the first read, as the path-based stream's open
+    // does, so its failures (FS_NOT_FOUND, a refused swap) surface from iteration
+    // in both modes. The descriptor stays open until the consumer finishes (or
+    // abandons) the stream; `for await` calls `return()`, so the finally runs on
+    // an early exit.
+    return Promise.resolve((async function* () {
+      const pinned = await pinReadTarget(target, signal)
       try {
-        yield* inner
+        yield* streamWholeText(pinned.target, signal)
       } finally {
         await pinned.close()
       }
-    })()
+    })())
   }
 
   override async readBytes(target: FsTarget, signal: AbortSignal | undefined, maxBytes: number): Promise<Uint8Array> {

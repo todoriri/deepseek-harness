@@ -92,6 +92,17 @@ describe.runIf(FD_PINNING_AVAILABLE)('descriptor-verified reads', () => {
     expect(Buffer.from(await fs.readByteRange(target, { offset: 0, length: 6 })).toString()).toBe('stable')
     expect((await fs.listDir(await fs.resolve(dir))).map(entry => entry.name)).toContain('stable.txt')
   })
+
+  it('reports a target removed after resolution as not found, from the stream’s first read', async () => {
+    const path = join(dir, 'gone.txt')
+    await writeFile(path, 'soon gone\n')
+    const target = await fs.resolve(path)
+    await rm(path)
+    await expect(fs.readText(target)).rejects.toMatchObject({ code: 'FS_NOT_FOUND' })
+    // Like the path-based stream, the verified stream opens on its first read.
+    const stream = await fs.streamText(target)
+    await expect(stream[Symbol.asyncIterator]().next()).rejects.toMatchObject({ code: 'FS_NOT_FOUND' })
+  })
 })
 
 describe.runIf(FD_PINNING_AVAILABLE)('dir-fd-pinned writes', () => {
@@ -104,6 +115,26 @@ describe.runIf(FD_PINNING_AVAILABLE)('dir-fd-pinned writes', () => {
     await expect(fs.writeText(target, 'x')).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
     expect(existsSync(join(outside, 'w'))).toBe(false)
     expect(existsSync(join(dir, 'd-real', 'w'))).toBe(false)
+  })
+
+  it('refuses a write whose destination ANCESTOR became a symlink after resolution, and lands nothing outside', async () => {
+    await mkdir(join(dir, 'a', 'b'), { recursive: true })
+    await mkdir(join(outside, 'b'))
+    const target = await fs.resolve(join(dir, 'a', 'b', 'w'))
+    // `O_NOFOLLOW` guards only the final component; the descriptor's identity
+    // check is what catches the redirected ancestor.
+    await rename(join(dir, 'a'), join(dir, 'a-real'))
+    await symlink(outside, join(dir, 'a'))
+    await expect(fs.writeText(target, 'x')).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    expect(existsSync(join(outside, 'b', 'w'))).toBe(false)
+  })
+
+  it('overwrites through the pinned destination and reads the diff basis from the verified file', async () => {
+    const path = join(dir, 'over.txt')
+    await writeFile(path, 'before\n')
+    const outcome = await fs.writeText(await fs.resolve(path), 'after\n')
+    expect(outcome).toMatchObject({ operation: 'update', before: 'before\n', after: 'after\n' })
+    expect(await readFile(path, 'utf8')).toBe('after\n')
   })
 
   it('creates missing intermediate directories through the pinned parent and publishes in place', async () => {
