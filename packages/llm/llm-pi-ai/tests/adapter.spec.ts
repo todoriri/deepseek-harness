@@ -135,6 +135,20 @@ describe('PiAiAdapter provider routing', () => {
     expect(result.usage).toEqual({ inputTokens: 3, outputTokens: 9, totalTokens: 12, reasoningTokens: 8 })
   })
 
+  it('sends the session id only in an opted-in sessionIdHeader', async () => {
+    const optedIn = await mockServer([{ events: textEvents }, { events: textEvents }])
+    const optedInCtx = await harness(optedIn.url, { sessionIdHeader: 'x-session-id' })
+    await assemble(optedInCtx, { model: 'deepseek-flash', messages: [], sessionId: 'session-abc' as never })
+    await assemble(optedInCtx, { model: 'deepseek-flash', messages: [] })
+    expect(optedIn.headers[0]?.['x-session-id']).toBe('session-abc')
+    expect(optedIn.headers[1]).not.toHaveProperty('x-session-id')
+
+    const unset = await mockServer([{ events: textEvents }])
+    const unsetCtx = await harness(unset.url)
+    await assemble(unsetCtx, { model: 'deepseek-flash', messages: [], sessionId: 'session-abc' as never })
+    expect(Object.values(unset.headers[0] ?? {})).not.toContain('session-abc')
+  })
+
   it('forwards common stream options and profile reasoning', async () => {
     const server = await mockServer([{ events: textEvents }])
     const ctx = await harness(server.url, {
@@ -961,6 +975,15 @@ describe('provider profile lifecycle', () => {
   ])('rejects provider header %j when Fetch cannot represent the entry', (name, value) => {
     expect(() => resolveProfiles({ openai: { headers: { [name]: value } } }))
       .toThrow(`provider "openai" header "${name}" is not valid for Fetch`)
+  })
+
+  it.each([
+    [{ sessionIdHeader: 'bad header name' }, /header "bad header name" is not valid for Fetch/],
+    [{ sessionIdHeader: '' }, /header "" is not valid for Fetch/],
+    [{ sessionIdHeader: 'X-Session-Id', headers: { 'x-session-id': 'fixed' } }, /sessionIdHeader "X-Session-Id" is already a request header/],
+    [{ sessionIdHeader: 'User-Agent' }, /sessionIdHeader "User-Agent" is already a request header/],
+  ] as const)('rejects sessionIdHeader %j that cannot carry the session id alone', (profile, error) => {
+    expect(() => resolveProfiles({ openai: profile })).toThrow(error)
   })
 
   it.each(['maxRetries', 'maxRetryDelayMs'] as const)(

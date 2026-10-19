@@ -19,7 +19,7 @@ import z from '@deepseek-ai/schemastery'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
-import { resolveRetryPolicy, RetryPolicySchema } from '@deepseek-ai/dsh-llm'
+import { attributionHeaders, resolveRetryPolicy, RetryPolicySchema } from '@deepseek-ai/dsh-llm'
 import type { ResolvedRetryPolicy, RetryPolicyConfig } from '@deepseek-ai/dsh-llm'
 import { deepEqualJson } from '@deepseek-ai/dsh-util-values'
 import {
@@ -150,6 +150,13 @@ export interface PiAiProviderProfile {
   defaultInput?: PiAiModality[]
   /** Provider request headers, validated against Fetch when the profile resolves; Harness attribution wins reserved names. */
   headers?: Record<string, string>
+  /**
+   * Request header that carries the Harness session id on every model request
+   * of this route. Unset by default, so a session id reaches a provider only
+   * when its deployment opts in. Must be a valid Fetch field name that neither
+   * `headers` nor Harness attribution also names.
+   */
+  sessionIdHeader?: string
   /** Provider-neutral pi-ai reasoning level. */
   reasoning?: ModelThinkingLevel
   /** Token budgets used by reasoning providers that support them. */
@@ -335,6 +342,7 @@ const profile = z.object({
   defaultMaxTokens: z.number().step(1).min(1).default(DEFAULT_MAX_TOKENS),
   defaultInput: z.array(z.union(MODALITIES)).default([...DEFAULT_INPUT]),
   headers: z.dict(z.string()),
+  sessionIdHeader: z.string(),
   reasoning: z.union(THINKING_LEVELS),
   thinkingBudgets,
   cacheRetention: z.union(['none', 'short', 'long']),
@@ -399,6 +407,23 @@ function assertValidHeaders(provider: string, headers: Readonly<Record<string, s
   }
 }
 
+/** Reject a session-id header Fetch cannot send or that another request header already names. */
+function assertValidSessionIdHeader(
+  provider: string,
+  name: string | undefined,
+  headers: Readonly<Record<string, string>> | undefined,
+): void {
+  if (name === undefined) return
+  assertValidHeaders(provider, { [name]: 'session-id' })
+  const taken = [...Object.keys(headers ?? {}), ...Object.keys(attributionHeaders())]
+  if (taken.some(other => other.toLowerCase() === name.toLowerCase())) {
+    throw new Error(
+      `llm-pi-ai: provider "${provider}" sessionIdHeader "${name}" is already a request header;`
+      + ' remove it from headers or choose another name',
+    )
+  }
+}
+
 /**
  * Resolve scalar defaults and materialize each route's serviceable models.
  * Deferred catalog validation retains diagnostics without deleting configured
@@ -426,6 +451,7 @@ export function resolveProfiles(
       throw new Error(`llm-pi-ai: provider "${provider}" has an empty displayName`)
     }
     assertValidHeaders(provider, source.headers)
+    assertValidSessionIdHeader(provider, source.sessionIdHeader, source.headers)
     const streamIdleTimeoutMs = source.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS
     if (!Number.isFinite(streamIdleTimeoutMs)
       || streamIdleTimeoutMs <= 0
