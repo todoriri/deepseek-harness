@@ -16,18 +16,21 @@ import type { AssistantMessage, AssistantMessageEvent, Usage as PiUsage } from '
 import { toPiReplayState } from './replay.ts'
 
 /**
- * Map pi-ai usage (reasoning folded into output by pi-ai).
+ * Map pi-ai usage, whose output count includes reasoning tokens.
  * @param usage - cumulative usage from the terminal pi-ai event.
- * @returns harness counts with pi-ai's exact total; cache fields appear only
- *   when non-zero (pi-ai reports zeros, not absence).
+ * @returns harness counts with pi-ai's exact total; cache and reasoning fields
+ *   appear only when non-zero (pi-ai reports zeros, not absence), and
+ *   reasoning only when it is a subset of output.
  */
 export function mapUsage(usage: PiUsage): TokenUsage {
+  const reasoning = usage.reasoning ?? 0
   return {
     inputTokens: usage.input,
     outputTokens: usage.output,
     totalTokens: usage.totalTokens,
     ...usage.cacheRead > 0 ? { cacheReadTokens: usage.cacheRead } : {},
     ...usage.cacheWrite > 0 ? { cacheWriteTokens: usage.cacheWrite } : {},
+    ...reasoning > 0 && reasoning <= usage.output ? { reasoningTokens: reasoning } : {},
   }
 }
 

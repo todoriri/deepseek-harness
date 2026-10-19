@@ -124,6 +124,17 @@ describe('PiAiAdapter provider routing', () => {
     expect(server.headers[0]?.['user-agent']).toBe(userAgent())
   })
 
+  it('reports provider reasoning tokens from chat-completions usage details', async () => {
+    const server = await mockServer([{ events: [
+      ...textEvents.slice(0, 2),
+      '{"choices":[{"delta":{},"index":0,"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":9,"completion_tokens_details":{"reasoning_tokens":8}}}',
+      '[DONE]',
+    ] }])
+    const ctx = await harness(server.url)
+    const result = await assemble(ctx, { model: 'deepseek-flash', messages: [] })
+    expect(result.usage).toEqual({ inputTokens: 3, outputTokens: 9, totalTokens: 12, reasoningTokens: 8 })
+  })
+
   it('forwards common stream options and profile reasoning', async () => {
     const server = await mockServer([{ events: textEvents }])
     const ctx = await harness(server.url, {

@@ -998,6 +998,20 @@ describe('mapStopReason / mapUsage', () => {
     })
     expect(mapUsage(usage(10, 5))).toEqual({ inputTokens: 10, outputTokens: 5, totalTokens: 15 })
   })
+
+  it('maps reasoning tokens as a nonzero subset of output without changing output', () => {
+    expect(mapUsage({ ...usage(10, 5), reasoning: 3 })).toEqual({
+      inputTokens: 10,
+      outputTokens: 5,
+      totalTokens: 15,
+      reasoningTokens: 3,
+    })
+    expect(mapUsage({ ...usage(10, 5), reasoning: 5 })).toMatchObject({ outputTokens: 5, reasoningTokens: 5 })
+    for (const reasoning of [undefined, 0, 6]) {
+      expect(mapUsage({ ...usage(10, 5), ...reasoning === undefined ? {} : { reasoning } }))
+        .not.toHaveProperty('reasoningTokens')
+    }
+  })
 })
 
 describe('toStreamChunks edge branches', () => {
