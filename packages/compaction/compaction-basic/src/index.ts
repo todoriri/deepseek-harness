@@ -14,8 +14,9 @@ import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
 import { assertNever } from '@deepseek-ai/dsh-util-values'
 import type { Agent, PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type { CommandId } from '@deepseek-ai/dsh-commands/brand'
-// Type-only: makes the optional sibling service available to `ctx.get()`.
-import type {} from '@deepseek-ai/dsh-compaction-tool-result-pruner'
+// Type-only: also makes the optional sibling service available to `ctx.get()`.
+import type { ToolResultPruner } from '@deepseek-ai/dsh-compaction-tool-result-pruner'
+import type { TokenMeasurement } from '@deepseek-ai/dsh-token-meter'
 import {
   resolveCompactSpec,
   resolveConfig,
@@ -78,6 +79,32 @@ function conversationTarget(
   return { provider: agent.options.provider, model: agent.options.model }
 }
 
+/**
+ * Decide whether a pressure prune frees at least `minGainRatio` tokens per
+ * request token the provider must prefill again after the earliest replacement.
+ * @param prune - pruner that prices its pending replacements.
+ * @param session - session whose current surface would be pruned.
+ * @param measurement - current surface pricing in positional order.
+ * @param minGainRatio - minimum freed-to-re-prefilled token ratio.
+ * @returns whether the prune qualifies; `false` when nothing is over budget.
+ */
+function pressurePrunePays(
+  prune: ToolResultPruner,
+  session: Session,
+  measurement: TokenMeasurement,
+  minGainRatio: number,
+): boolean {
+  const estimates = prune.estimateSession(session)
+  const first = estimates[0]
+  if (first === undefined) return false
+  const freedTokens = estimates.reduce((sum, estimate) => sum + estimate.tokensFreed, 0)
+  // An unpriced replacement charges the whole surface, which favors summarizing.
+  const start = Math.max(0, measurement.nodes.findIndex(node => node.seq === first.seq))
+  const suffixTokens = measurement.nodes.slice(start)
+    .reduce((sum, node) => sum + node.tokens, 0)
+  return freedTokens >= minGainRatio * Math.max(0, suffixTokens - freedTokens)
+}
+
 const thresholdRatioSchema = z.number()
 const headroomTokensSchema = z.number().step(1).min(0)
 const retainRatioSchema = z.number()
@@ -87,6 +114,7 @@ const summarizationModelSchema = z.string()
 const maxTokensSchema = z.number().step(1).min(1)
 const compactionRetriesSchema = z.number().step(1).min(0)
 const maxOverflowRetriesSchema = z.number().step(1).min(0)
+const pressurePruneMinGainRatioSchema = z.number().min(0)
 
 const modelPolicy: z<ModelCompactPolicyConfig> = z.object({
   provider: z.string().required(),
@@ -100,6 +128,7 @@ const modelPolicy: z<ModelCompactPolicyConfig> = z.object({
   maxTokens: maxTokensSchema,
   compactionRetries: compactionRetriesSchema,
   maxOverflowRetries: maxOverflowRetriesSchema,
+  pressurePruneMinGainRatio: pressurePruneMinGainRatioSchema,
 })
 
 /**
@@ -123,6 +152,7 @@ export class BasicCompactionEngine extends CompactionEngine {
     maxTokens: maxTokensSchema,
     compactionRetries: compactionRetriesSchema,
     maxOverflowRetries: maxOverflowRetriesSchema,
+    pressurePruneMinGainRatio: pressurePruneMinGainRatioSchema,
     modelPolicies: z.array(modelPolicy),
     auto: z.boolean(),
   })
@@ -318,13 +348,16 @@ export class BasicCompactionEngine extends CompactionEngine {
     )
     if (measurement.totalTokens < spec.thresholdTokens) return null
 
-    // Once pressure qualifies, land the model-free pass before choosing a
-    // summary range, then remeasure through the singleton replay fold.
-    if (prune !== undefined) {
+    // A prune rewrites the request from its earliest replacement onward, so
+    // land it before summarizing only when it frees enough of that re-prefill
+    // or nothing is summarizable; otherwise the summary reads the cached prefix.
+    if (prune !== undefined && (
+      pressurePrunePays(prune, agent.session, measurement, spec.pressurePruneMinGainRatio)
+      || selectCompactableRange(agent.session, measurement, spec.retainTokens) === null)) {
       prune.pruneSession(agent.session)
       measurement = meter.measure(agent.session)
+      if (measurement.totalTokens < spec.thresholdTokens) return null
     }
-    if (measurement.totalTokens < spec.thresholdTokens) return null
 
     let result: CompactionResult | null = null
     for (let attempt = 0; attempt <= spec.compactionRetries; attempt += 1) {
@@ -336,6 +369,9 @@ export class BasicCompactionEngine extends CompactionEngine {
         break
       }
       result = await this.compactRegion(range.start, range.end, agent, signal)
+      // The summary replaced every non-system node, so the next request
+      // prefills the retained tail again whether or not it is pruned.
+      prune?.pruneSession(agent.session)
       measurement = meter.measure(agent.session)
       if (measurement.totalTokens < spec.thresholdTokens) return result
     }

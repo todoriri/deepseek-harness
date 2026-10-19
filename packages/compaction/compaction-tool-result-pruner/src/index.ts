@@ -16,6 +16,7 @@ import type {} from '@deepseek-ai/dsh-token-meter'
 import { codePointLength, DEFAULTS, PRUNE_MARKER, resolveConfig } from './config.ts'
 import type {
   PrunedEntry,
+  PruneEstimate,
   PruneResult,
   ResolvedConfig,
   ToolResultPruneConfig,
@@ -24,6 +25,7 @@ import type {
 export { codePointLength, DEFAULTS, PRUNE_MARKER, resolveConfig } from './config.ts'
 export type {
   PrunedEntry,
+  PruneEstimate,
   PruneResult,
   ResolvedConfig,
   ToolResultPruneConfig,
@@ -38,6 +40,8 @@ declare module '@deepseek-ai/cordis' {
 interface SnapshotCandidate {
   readonly seq: SessionSeq
   readonly event: SessionEvent<'tool/result'>
+  readonly original: ToolResultMessage
+  readonly content: ContentBlock[]
 }
 
 /** Deterministic head/middle/tail pruning for current tool-result surface nodes. */
@@ -134,20 +138,9 @@ export class ToolResultPruner extends Service {
    * earlier in the pass remain durable.
    */
   pruneSession(session: Session): PruneResult {
-    const candidates: SnapshotCandidate[] = []
-    for (const seq of [...session.surface.nodes]) {
-      // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
-      const event = session.eventAt(seq)
-      /* v8 ignore next -- surface seqs are validated contiguous log references. */
-      if (event?.type === 'tool/result') candidates.push({ seq, event })
-    }
-
     const pruned: PrunedEntry[] = []
     let charsRemoved = 0
-    for (const { seq, event } of candidates) {
-      const original = session.deriveEventMessage(event) as ToolResultMessage
-      const content = this.pruneContent(original.content)
-      if (content === null) continue
+    for (const { seq, event, original, content } of this.snapshotCandidates(session)) {
       const charsBefore = this.measureContent(original.content)
       const charsAfter = this.measureContent(content)
       const message = freezeMessage<ToolResultMessage>({
@@ -179,6 +172,35 @@ export class ToolResultPruner extends Service {
       charsRemoved += charsBefore - charsAfter
     }
     return { pruned, charsRemoved }
+  }
+
+  /**
+   * Price, without appending, the replacements `pruneSession` would land now.
+   * @param session - session whose current surface is inspected.
+   * @returns one estimate per over-budget tool result, in surface order.
+   */
+  estimateSession(session: Session): PruneEstimate[] {
+    const { tokenMeter } = this.ctx
+    return this.snapshotCandidates(session).map(({ seq, original, content }) => ({
+      seq,
+      tokensFreed: tokenMeter.estimateMessage(original)
+        - tokenMeter.estimateMessage({ ...original, content }),
+    }))
+  }
+
+  /** Snapshot every current over-budget tool result with its pruned content. */
+  private snapshotCandidates(session: Session): SnapshotCandidate[] {
+    const candidates: SnapshotCandidate[] = []
+    for (const seq of [...session.surface.nodes]) {
+      // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
+      const event = session.eventAt(seq)
+      /* v8 ignore next -- surface seqs are validated contiguous log references. */
+      if (event?.type !== 'tool/result') continue
+      const original = session.deriveEventMessage(event) as ToolResultMessage
+      const content = this.pruneContent(original.content)
+      if (content !== null) candidates.push({ seq, event, original, content })
+    }
+    return candidates
   }
 }
 

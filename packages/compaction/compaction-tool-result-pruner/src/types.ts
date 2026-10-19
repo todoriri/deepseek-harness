@@ -32,6 +32,14 @@ export interface PrunedEntry {
   readonly charsAfter: number
 }
 
+/** Heuristic request-token effect of one replacement a pruning pass would land. */
+export interface PruneEstimate {
+  /** Current tool-result surface node the pass would replace. */
+  readonly seq: SessionSeq
+  /** Fixed-heuristic tokens the replacement removes from the request. */
+  readonly tokensFreed: number
+}
+
 /** Aggregate outcome of one stable-surface pruning pass. */
 export interface PruneResult {
   /** Replacements in the snapshotted surface order. */

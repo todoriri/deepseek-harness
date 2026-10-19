@@ -319,6 +319,7 @@ describe('compact configuration and defaults', () => {
       maxTokens: 65_536,
       compactionRetries: 1,
       maxOverflowRetries: 1,
+      pressurePruneMinGainRatio: 1,
       modelPolicies: [],
       auto: true,
     })
@@ -414,6 +415,7 @@ describe('compact configuration and defaults', () => {
         maxTokens: 512,
         compactionRetries: 2,
         maxOverflowRetries: 3,
+        pressurePruneMinGainRatio: 0,
       }],
     }), { provider: 'ratio-provider', model: 'ratio-model' })
     expect(resolveCompactSpec(ratioOverride, 2_000, 0)).toMatchObject({
@@ -424,6 +426,7 @@ describe('compact configuration and defaults', () => {
       maxTokens: 512,
       compactionRetries: 2,
       maxOverflowRetries: 3,
+      pressurePruneMinGainRatio: 0,
     })
   })
 
@@ -512,6 +515,13 @@ describe('compact configuration and defaults', () => {
       [{ modelPolicies: [{ provider: MODEL, model: MODEL, headroomTokens: -1 }] }, /headroomTokens.*non-negative integer/],
       [{ compactionRetries: -1 }, /compactionRetries/],
       [{ maxOverflowRetries: -1 }, /maxOverflowRetries/],
+      [{ pressurePruneMinGainRatio: -0.5 }, /pressurePruneMinGainRatio.*non-negative finite number/],
+      [{ pressurePruneMinGainRatio: Number.POSITIVE_INFINITY }, /pressurePruneMinGainRatio.*non-negative finite number/],
+      [{ pressurePruneMinGainRatio: '1' }, /pressurePruneMinGainRatio.*non-negative finite number/],
+      [
+        { modelPolicies: [{ provider: MODEL, model: MODEL, pressurePruneMinGainRatio: -1 }] },
+        /modelPolicies\[0\]\.pressurePruneMinGainRatio/,
+      ],
       [{ auto: 'yes' }, /auto must be a boolean/],
       [{ summarizationProvider: 1 }, /summarizationProvider must be a string/],
       [{ summarizationModel: 1 }, /summarizationModel must be a string/],
@@ -983,9 +993,110 @@ describe('optional model-free tool-result pruning', () => {
     expect(session.surface.replaceGeneration).toBe(1)
   })
 
-  it('summarizes the pruned surface when pruning is insufficient', async () => {
+  /** Insufficient-prune pressure fixture whose earliest prunable result precedes most of the request. */
+  function earlyPruneSetup(pressurePruneMinGainRatio?: number): {
+    ctx: Context
+    prune: ToolResultPruner
+    compact: TestCompactionEngine
+    session: Session
+  } {
     const ctx = createContext(2_000)
-    void new ToolResultPruner(ctx, pruneConfig)
+    const prune = new ToolResultPruner(ctx, pruneConfig)
+    const compact = new TestCompactionEngine(ctx, {
+      headroomTokens: 0,
+      maxTokens: 8192,
+      auto: false,
+      thresholdRatio: 0.5,
+      retainTokens: 50,
+      ...pressurePruneMinGainRatio === undefined ? {} : { pressurePruneMinGainRatio },
+    })
+    return { ctx, prune, compact, session: toolConversation() }
+  }
+
+  /** Freed-to-re-prefilled token ratio of the prune pending on `session`. */
+  function pendingPruneGainRatio(ctx: Context, prune: ToolResultPruner, session: Session): number {
+    const estimates = prune.estimateSession(session)
+    const freed = estimates.reduce((sum, estimate) => sum + estimate.tokensFreed, 0)
+    const nodes = ctx.tokenMeter.measure(session).nodes
+    const start = nodes.findIndex(node => node.seq === estimates[0]!.seq)
+    const suffix = nodes.slice(start).reduce((sum, node) => sum + node.tokens, 0)
+    return freed / (suffix - freed)
+  }
+
+  /** Heuristic tokens a prefix cache holding `cached` misses when serving `request`. */
+  function prefixCacheMiss(
+    ctx: Context,
+    cached: readonly Message[],
+    request: readonly Message[],
+  ): number {
+    let shared = 0
+    while (shared < cached.length && shared < request.length
+      && JSON.stringify(cached[shared]) === JSON.stringify(request[shared])) shared += 1
+    return request.slice(shared)
+      .reduce((sum, message) => sum + ctx.tokenMeter.estimateMessage(message), 0)
+  }
+
+  it('summarizes the unchanged prefix, then prunes the retained tail, when a prune would re-prefill more than it frees', async () => {
+    const { ctx, prune, compact, session } = earlyPruneSetup()
+    expect(pendingPruneGainRatio(ctx, prune, session)).toBeLessThan(1)
+    const request = session.deriveMessages()
+
+    expect(await compactIfNeeded(compact, session)).not.toBeNull()
+    expect(compact.calls).toHaveLength(1)
+    const summarized = compact.calls[0]!.input
+    expect(summarizedText(summarized)).toContain('result 1 '.repeat(300))
+    expect(summarizedText(summarized)).not.toContain('tool result middle pruned')
+    expect(summarized.messages).toEqual(request.slice(0, summarized.messages.length))
+    const retainedResults = session.deriveMessages().filter(message => message.role === 'tool')
+    expect(retainedResults).toHaveLength(1)
+    expect(JSON.stringify(retainedResults[0]!.content)).toContain('tool result middle pruned')
+    expect(prune.estimateSession(session)).toEqual([])
+  })
+
+  it('prunes before summarizing when pressurePruneMinGainRatio is 0', async () => {
+    const { compact, session } = earlyPruneSetup(0)
+
+    expect(await compactIfNeeded(compact, session)).not.toBeNull()
+    expect(compact.calls).toHaveLength(1)
+    expect(summarizedText(compact.calls[0]!.input)).toContain('tool result middle pruned')
+    expect(summarizedText(compact.calls[0]!.input)).not.toContain('result 1 '.repeat(300))
+  })
+
+  it('lands a pressure prune exactly when its freed tokens reach the configured share of its re-prefill', async () => {
+    const probe = earlyPruneSetup()
+    const ratio = pendingPruneGainRatio(probe.ctx, probe.prune, probe.session)
+
+    const atRatio = earlyPruneSetup(ratio)
+    await compactIfNeeded(atRatio.compact, atRatio.session)
+    expect(summarizedText(atRatio.compact.calls[0]!.input)).toContain('tool result middle pruned')
+
+    const aboveRatio = earlyPruneSetup(ratio * 1.01)
+    await compactIfNeeded(aboveRatio.compact, aboveRatio.session)
+    expect(summarizedText(aboveRatio.compact.calls[0]!.input)).not.toContain('tool result middle pruned')
+  })
+
+  it('keeps the pressure summary on the cached request prefix and re-prefills less than prune-first', async () => {
+    const misses = await Promise.all([0, undefined].map(async (pressurePruneMinGainRatio) => {
+      const { ctx, compact, session } = earlyPruneSetup(pressurePruneMinGainRatio)
+      const cached = session.deriveMessages()
+      await compactIfNeeded(compact, session)
+      return {
+        summary: prefixCacheMiss(ctx, cached, compact.calls[0]!.input.messages),
+        nextRequest: prefixCacheMiss(ctx, cached, session.deriveMessages()),
+      }
+    }))
+    const [pruneFirst, cacheAware] = misses as [typeof misses[0], typeof misses[0]]
+
+    expect(pruneFirst.summary).toBeGreaterThan(0)
+    expect(cacheAware.summary).toBe(0)
+    expect(cacheAware.nextRequest).toBe(pruneFirst.nextRequest)
+    expect(cacheAware.summary + cacheAware.nextRequest)
+      .toBeLessThan(pruneFirst.summary + pruneFirst.nextRequest)
+  })
+
+  it('summarizes directly when the mounted pruner has nothing over budget', async () => {
+    const ctx = createContext(1_000)
+    const prune = new ToolResultPruner(ctx, pruneConfig)
     const compact = new TestCompactionEngine(ctx, {
       headroomTokens: 0,
       maxTokens: 8192,
@@ -993,12 +1104,31 @@ describe('optional model-free tool-result pruning', () => {
       thresholdRatio: 0.5,
       retainTokens: 50,
     })
-    const session = toolConversation()
+    const session = conversation()
+    const pruneSession = vi.spyOn(prune, 'pruneSession')
 
     expect(await compactIfNeeded(compact, session)).not.toBeNull()
     expect(compact.calls).toHaveLength(1)
-    expect(summarizedText(compact.calls[0]!.input)).toContain('tool result middle pruned')
-    expect(summarizedText(compact.calls[0]!.input)).not.toContain('result 1 '.repeat(300))
+    expect(pruneSession).toHaveBeenCalledTimes(1)
+    expect(pruneSession.mock.results[0]?.value).toEqual({ pruned: [], charsRemoved: 0 })
+  })
+
+  it('prunes under pressure whatever the ratio when no range is summarizable', async () => {
+    const ctx = createContext(1_000)
+    void new ToolResultPruner(ctx, pruneConfig)
+    const compact = new TestCompactionEngine(ctx, {
+      headroomTokens: 0,
+      maxTokens: 8192,
+      auto: false,
+      thresholdRatio: 0.5,
+      retainTokens: 50,
+      pressurePruneMinGainRatio: 1_000_000,
+    })
+    const session = oversizedToolResult()
+
+    expect(await compactIfNeeded(compact, session)).toBeNull()
+    expect(compact.calls).toHaveLength(0)
+    expect(session.surface.replaceGeneration).toBe(1)
   })
 
   it('retains the original compaction-basic behavior without the optional plugin', async () => {

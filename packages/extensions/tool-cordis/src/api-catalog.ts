@@ -3409,6 +3409,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'landed replacements and aggregate Unicode-code-point savings.',
         throws: ['when the session rejects a replacement; replacements committed earlier in the pass remain durable.'],
       },
+      {
+        signature: 'estimateSession(session: Session): PruneEstimate[]',
+        description: 'Price, without appending, the replacements `pruneSession` would land now.',
+        parameters: [{ name: 'session', description: 'session whose current surface is inspected.' }],
+        returns: 'one estimate per over-budget tool result, in surface order.',
+      },
     ],
   },
   {
@@ -6588,6 +6594,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'PrunedEntry',
     declaration: 'export interface PrunedEntry {\n    readonly originalSeq: SessionSeq;\n    readonly replacementSeq: SessionSeq;\n    readonly callId: ToolCallId;\n    readonly charsBefore: number;\n    readonly charsAfter: number;\n}',
+  },
+  {
+    name: 'PruneEstimate',
+    declaration: 'export interface PruneEstimate {\n    readonly seq: SessionSeq;\n    readonly tokensFreed: number;\n}',
   },
   {
     name: 'PruneResult',

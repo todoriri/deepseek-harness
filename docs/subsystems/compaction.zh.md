@@ -98,13 +98,13 @@ type ManualCompactionErrorCode =
 
 `changed` 和 `summary` 闭合失败尝试并将其持久化到日志，不写入摘要替换；恢复过程中记录的图片省略仍然有效。`commit` 可能发生在部分变更之后；`persistence` 表示内存中的标记对已闭合，但 flush 失败。取消独立于这些失败，并在完成必要清理后抛出原始 abort 原因。
 
-压力压缩在 `agent/pre-step` waterfall（瀑布式事件）中运行，先于请求推导。一旦压力或规范化溢出满足条件，compaction-basic 会在选择范围前调用可选的 [`ctx.toolResultPruner`](../../packages/compaction/compaction-tool-result-pruner/README.zh.md)，再通过 `ctx.tokenMeter` 重新测量，并且可以在不生成摘要的情况下推进 surface。失败请求的恢复在失败的步骤关闭后通过 `agent/request-error` 运行；仅当 surface replacement generation 前进时才返回重试动作，即便后续摘要工作在剪枝后抛异常亦如此；取消仍然优先。区域边界保持工具调用/结果配对，但不保持整个轮次，因此一个过大轮次中较早关闭的步骤可以被压缩。`dsh-compaction-basic` 拥有阈值、保留尾部策略、溢出上限与失败处理。
+压力压缩在 `agent/pre-step` waterfall（瀑布式事件）中运行，先于请求推导。一旦规范化溢出满足条件，compaction-basic 会在选择范围前调用可选的 [`ctx.toolResultPruner`](../../packages/compaction/compaction-tool-result-pruner/README.zh.md)，再通过 `ctx.tokenMeter` 重新测量。压力触发时，只有当估算的节省足以抵偿重新预填充的请求后缀或没有可摘要的内容时，它才会在选择范围前剪枝，并可随后在不生成摘要的情况下推进 surface；否则它会在摘要之后剪枝替换后的 surface（[策略](../../packages/compaction/compaction-basic/README.zh.md#trimming-oversized-tool-outputs)）。失败请求的恢复在失败的步骤关闭后通过 `agent/request-error` 运行；仅当 surface replacement generation 前进时才返回重试动作，即便后续摘要工作在剪枝后抛异常亦如此；取消仍然优先。区域边界保持工具调用/结果配对，但不保持整个轮次，因此一个过大轮次中较早关闭的步骤可以被压缩。`dsh-compaction-basic` 拥有阈值、保留尾部策略、溢出上限与失败处理。
 
 该 Service Definition 导出 `toolPairingBalancedBefore(session, seq)` 与 `toolPairingBalancedAfter(session, seq)`，用于检查 seq 之前与之后的工具调用/结果配对。两者都会验证当前 surface 成员关系，并拒绝缺失的 seq 与遗留结果；[包约定](../../packages/compaction/compaction/README.zh.md#tool-pairing-boundaries)定义其缓存行为。
 
 ## 工具结果剪枝产出
 
-可选的工具结果剪枝服务会报告每次持久内容替换以及 Unicode code point 的总减少量。其公开结果类型位于 [`compaction-tool-result-pruner/src/types.ts`](../../packages/compaction/compaction-tool-result-pruner/src/types.ts)。
+可选的工具结果剪枝服务会报告每次持久内容替换以及 Unicode code point 的总减少量，并在运行一次剪枝之前估算其将释放的请求 token。其公开结果类型位于 [`compaction-tool-result-pruner/src/types.ts`](../../packages/compaction/compaction-tool-result-pruner/src/types.ts)。
 
 ```ts type-equiv
 /** Cited source event and size accounting for one landed surface replacement. */
@@ -129,6 +129,16 @@ interface PruneResult {
   readonly pruned: readonly PrunedEntry[]
   /** Total Unicode code points removed across replacements. */
   readonly charsRemoved: number
+}
+```
+
+```ts type-equiv
+/** Heuristic request-token effect of one replacement a pruning pass would land. */
+interface PruneEstimate {
+  /** Current tool-result surface node the pass would replace. */
+  readonly seq: SessionSeq
+  /** Fixed-heuristic tokens the replacement removes from the request. */
+  readonly tokensFreed: number
 }
 ```
 
@@ -245,6 +255,13 @@ pruneContent(blocks: readonly ContentBlock[]): ContentBlock[] | null
  * earlier in the pass remain durable.
  */
 pruneSession(session: Session): PruneResult
+
+/**
+ * Price, without appending, the replacements `pruneSession` would land now.
+ * @param session - session whose current surface is inspected.
+ * @returns one estimate per over-budget tool result, in surface order.
+ */
+estimateSession(session: Session): PruneEstimate[]
 ```
 
 Types: [ContentBlock](llm-streaming.zh.md) · [Session](session.zh.md)

@@ -22,6 +22,9 @@ const DEFAULT_THRESHOLD_RATIO = 0.8
 /** Default verbatim-tail fraction for every routed model. */
 const DEFAULT_RETAIN_RATIO = 0.16
 
+/** Default minimum freed-to-re-prefilled token ratio for a pressure prune. */
+const DEFAULT_PRESSURE_PRUNE_MIN_GAIN_RATIO = 1
+
 /** Fields shared by top-level defaults and exact-target overrides. */
 const POLICY_CONFIG_KEYS = [
   'thresholdRatio',
@@ -33,6 +36,7 @@ const POLICY_CONFIG_KEYS = [
   'maxTokens',
   'compactionRetries',
   'maxOverflowRetries',
+  'pressurePruneMinGainRatio',
 ] as const
 
 /** Complete public top-level configuration key set. */
@@ -104,6 +108,8 @@ export function resolveConfig(config: BasicCompactionConfig = {}): ResolvedConfi
     maxTokens,
     compactionRetries: config.compactionRetries ?? 1,
     maxOverflowRetries: config.maxOverflowRetries ?? 1,
+    pressurePruneMinGainRatio: config.pressurePruneMinGainRatio
+      ?? DEFAULT_PRESSURE_PRUNE_MIN_GAIN_RATIO,
     modelPolicies,
     auto: config.auto ?? true,
   })
@@ -135,6 +141,8 @@ export function resolveTargetPolicy(
     maxTokens: override?.maxTokens ?? config.maxTokens,
     compactionRetries: override?.compactionRetries ?? config.compactionRetries,
     maxOverflowRetries: override?.maxOverflowRetries ?? config.maxOverflowRetries,
+    pressurePruneMinGainRatio: override?.pressurePruneMinGainRatio
+      ?? config.pressurePruneMinGainRatio,
   })
 }
 
@@ -213,6 +221,7 @@ export function resolveCompactSpec(
     maxTokens: policy.maxTokens,
     compactionRetries: policy.compactionRetries,
     maxOverflowRetries: policy.maxOverflowRetries,
+    pressurePruneMinGainRatio: policy.pressurePruneMinGainRatio,
   })
 }
 
@@ -285,6 +294,7 @@ function validatePolicy(
   const maxTokens = config.maxTokens
   const compactionRetries = config.compactionRetries
   const maxOverflowRetries = config.maxOverflowRetries
+  const pressurePruneMinGainRatio = config.pressurePruneMinGainRatio
   if (thresholdRatio !== undefined) assertRatio(`${name}.thresholdRatio`, thresholdRatio)
   if (headroomTokens !== undefined) assertNonNegativeInteger(`${name}.headroomTokens`, headroomTokens)
   if (retainRatio !== undefined) assertRatio(`${name}.retainRatio`, retainRatio)
@@ -298,6 +308,9 @@ function validatePolicy(
   }
   if (maxOverflowRetries !== undefined) {
     assertNonNegativeInteger(`${name}.maxOverflowRetries`, maxOverflowRetries)
+  }
+  if (pressurePruneMinGainRatio !== undefined) {
+    assertNonNegativeNumber(`${name}.pressurePruneMinGainRatio`, pressurePruneMinGainRatio)
   }
 
   validateSummarizationPair(config, name)
@@ -352,6 +365,12 @@ function assertPositiveInteger(name: string, value: unknown): asserts value is n
 function assertNonNegativeInteger(name: string, value: unknown): asserts value is number {
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
     throw new Error(`${name} (${String(value)}) must be a non-negative integer`)
+  }
+}
+
+function assertNonNegativeNumber(name: string, value: unknown): asserts value is number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw new Error(`${name} (${String(value)}) must be a non-negative finite number`)
   }
 }
 

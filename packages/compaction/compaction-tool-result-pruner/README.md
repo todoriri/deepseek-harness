@@ -57,7 +57,7 @@ Character counts are Unicode code points, so slicing never splits an emoji pair,
 
 ### When trimming runs
 
-Trimming only runs when a compaction trigger qualifies: `dsh-compaction-basic` invokes it after pressure or overflow is confirmed, before it selects what to condense. Below pressure nothing is trimmed, and trimming itself makes no model call.
+Trimming only runs when a compaction trigger qualifies. After a confirmed overflow, `dsh-compaction-basic` trims before it selects what to condense. Under pressure, it trims first only when the estimated savings pay for the request suffix the provider must prefill again, or when nothing can be condensed; otherwise it trims the retained tail after condensing ([policy](../compaction-basic/README.md#trimming-oversized-tool-outputs)). Below pressure nothing is trimmed, and trimming itself makes no model call.
 
 -----
 
@@ -79,15 +79,15 @@ The pruner is built on three commitments:
 
 ### Pruning mechanics
 
-Pruning measures `text` blocks by Unicode code point (non-text blocks cost zero), produces a bounded replacement — or none when content is already within budget — and swaps each over-budget tool result for one newly appended `tool/result` that replaces the original event and cites it through `sourceEventSeqs`, immediately preceded by a `compaction/prune` shadow-price event. A session that rejects a replacement fails the run synchronously; replacements committed earlier in the pass stay durable. Non-text blocks keep their original relative positions, and slicing never splits a UTF-16 surrogate pair. Exact signatures are in [`src/index.ts`](src/index.ts).
+Pruning measures `text` blocks by Unicode code point (non-text blocks cost zero), produces a bounded replacement — or none when content is already within budget — and `estimateSession` prices those replacements in heuristic tokens without appending. `pruneSession` swaps each over-budget tool result for one newly appended `tool/result` that replaces the original event and cites it through `sourceEventSeqs`, immediately preceded by a `compaction/prune` shadow-price event. A session that rejects a replacement fails the run synchronously; replacements committed earlier in the pass stay durable. Non-text blocks keep their original relative positions, and slicing never splits a UTF-16 surrogate pair. Exact signatures are in [`src/index.ts`](src/index.ts).
 
 ### Source map
 
 | File | Role |
 |---|---|
-| [`src/index.ts`](src/index.ts) | Plugin entry: `ToolResultPruner` service, `pruneSession` / `pruneContent` / `measureContent` |
+| [`src/index.ts`](src/index.ts) | Plugin entry: `ToolResultPruner` service, `pruneSession` / `estimateSession` / `pruneContent` / `measureContent` |
 | [`src/config.ts`](src/config.ts) | `PRUNE_MARKER`, defaults, code-point counting, budget validation |
-| [`src/types.ts`](src/types.ts) | `ToolResultPruneConfig`, `ResolvedConfig`, `PrunedEntry`, `PruneResult` |
+| [`src/types.ts`](src/types.ts) | `ToolResultPruneConfig`, `ResolvedConfig`, `PrunedEntry`, `PruneEstimate`, `PruneResult` |
 
 </details>
 
@@ -98,7 +98,7 @@ Pruning measures `text` blocks by Unicode code point (non-text blocks cost zero)
 
 Read these pages when the package-level contract is not enough; they move from the consuming backend to the shared seam and the pricing service.
 
-- [Compaction basic backend](../compaction-basic/README.md) — the backend that trims oversized tool outputs before condensing.
+- [Compaction basic backend](../compaction-basic/README.md) — the backend that decides when to trim oversized tool outputs.
 - [Compaction seam](../compaction/README.md) — the condensation contract this package plugs into.
 - [Compaction subsystem reference](../../../docs/subsystems/compaction.md) — the condensation vocabulary, results, and service behavior.
 - [Token meter](../../llm/token-meter/README.md) — the measurement service that decides whether trimming relieved pressure.
@@ -117,7 +117,7 @@ Once a compaction trigger qualifies, future requests see the retained head, `\n\
 
 #### Token effect
 
-Each rewritten tool result has at most `thresholdChars` text code points. Pruning itself makes no model call; compaction-basic skips summarization when the remeasured request falls below pressure, otherwise the summarizer reads the pruned surface.
+Each rewritten tool result has at most `thresholdChars` text code points. Pruning itself makes no model call; compaction-basic skips summarization when a pre-summary prune brings the remeasured request below pressure.
 
 #### KV Cache effect
 

@@ -1,0 +1,22 @@
+# Bilingual-pair consistency record for 2026-10-19-cache-aware-pressure-pruning.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-10-19-cache-aware-pressure-pruning.md
+/agent-note-cache-aware-pressure-pruning:
+  en: 6ef8a33513c05289
+  zh: b7005b7d05150240
+/agent-note-cache-aware-pressure-pruning/problem:
+  en: 4df915dc2135cedf
+  zh: a0fd85c3ad46e7dc
+/agent-note-cache-aware-pressure-pruning/decision:
+  en: 1fbb1609aef3fc88
+  zh: 135a336c840f92bb
+/agent-note-cache-aware-pressure-pruning/replay:
+  en: afcb3d28d9d8eca9
+  zh: 4356d1214495c7e0
+/agent-note-cache-aware-pressure-pruning/alternatives-considered:
+  en: 4e085597f9c4ca76
+  zh: ad998e7df6c4c018
+/agent-note-cache-aware-pressure-pruning/consequences:
+  en: 2233548c73863933
+  zh: 9cdab38d72384960

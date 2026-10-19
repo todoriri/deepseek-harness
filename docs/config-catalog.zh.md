@@ -691,7 +691,7 @@ export type ThemePreference = typeof THEME_PREFERENCES[number]
 ## `@deepseek-ai/dsh-compaction-basic`
 
 - `inject`: `llm` · `tokenMeter` · `sessions`
-- `source`: [`packages/compaction/compaction-basic/src/types.ts:40`](../packages/compaction/compaction-basic/src/types.ts)
+- `source`: [`packages/compaction/compaction-basic/src/types.ts:47`](../packages/compaction/compaction-basic/src/types.ts)
 
 ```ts config-catalog
 /** Basic compaction configuration with an optional exact-target policy table. */
@@ -722,6 +722,13 @@ export interface CompactionPolicyConfig {
   compactionRetries?: number
   /** Maximum retries after canonical context overflow; `0` disables recovery. Defaults to `1`. */
   maxOverflowRetries?: number
+  /**
+   * Minimum ratio of tokens a pressure-triggered tool-result prune frees to the
+   * request tokens after its earliest replacement, which the provider must
+   * prefill again. Below it, pressure summarizes first and prunes the
+   * replacement surface. `0` prunes before every pressure summary. Defaults to `1`.
+   */
+  pressurePruneMinGainRatio?: number
 }
 
 /** Exact provider/model override merged over the default compaction policy. */

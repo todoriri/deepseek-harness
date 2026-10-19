@@ -26,6 +26,13 @@ export interface CompactionPolicyConfig {
   compactionRetries?: number
   /** Maximum retries after canonical context overflow; `0` disables recovery. Defaults to `1`. */
   maxOverflowRetries?: number
+  /**
+   * Minimum ratio of tokens a pressure-triggered tool-result prune frees to the
+   * request tokens after its earliest replacement, which the provider must
+   * prefill again. Below it, pressure summarizes first and prunes the
+   * replacement surface. `0` prunes before every pressure summary. Defaults to `1`.
+   */
+  pressurePruneMinGainRatio?: number
 }
 
 /** Exact provider/model override merged over the default compaction policy. */
@@ -58,6 +65,7 @@ interface ResolvedPolicyFields {
   readonly maxTokens: number
   readonly compactionRetries: number
   readonly maxOverflowRetries: number
+  readonly pressurePruneMinGainRatio: number
 }
 
 /** Validated immutable config whose target-specific defaults remain unresolved. */

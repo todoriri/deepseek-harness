@@ -98,13 +98,13 @@ type ManualCompactionErrorCode =
 
 `changed` and `summary` close and persist the failed attempt without a summary replacement; image omissions recorded during recovery remain effective. `commit` may follow partial mutation; `persistence` means the in-memory bracket closed but its flush failed. Cancellation remains separate and throws the exact abort reason after required cleanup.
 
-Pressure compaction runs at the `agent/pre-step` waterfall before request derivation. Once pressure or canonical overflow qualifies, compaction-basic invokes optional [`ctx.toolResultPruner`](../../packages/compaction/compaction-tool-result-pruner/README.md) before range selection, remeasures through `ctx.tokenMeter`, and can advance the surface without a summary. Failed-request recovery runs through `agent/request-error` after the failed step closes and returns a retry action only when the surface replacement generation advances, even if later summary work throws after pruning; cancellation still wins. Region boundaries preserve tool-call/result pairing but not whole turns, allowing early closed steps of one oversized turn to compact. `dsh-compaction-basic` owns thresholds, retained-tail policy, overflow caps, and failure handling.
+Pressure compaction runs at the `agent/pre-step` waterfall before request derivation. Once canonical overflow qualifies, compaction-basic invokes optional [`ctx.toolResultPruner`](../../packages/compaction/compaction-tool-result-pruner/README.md) before range selection and remeasures through `ctx.tokenMeter`. Under pressure it prunes before range selection only when the estimated savings pay for the re-prefilled request suffix or nothing is summarizable, and can then advance the surface without a summary; otherwise it prunes the replacement surface after summarizing ([policy](../../packages/compaction/compaction-basic/README.md#trimming-oversized-tool-outputs)). Failed-request recovery runs through `agent/request-error` after the failed step closes and returns a retry action only when the surface replacement generation advances, even if later summary work throws after pruning; cancellation still wins. Region boundaries preserve tool-call/result pairing but not whole turns, allowing early closed steps of one oversized turn to compact. `dsh-compaction-basic` owns thresholds, retained-tail policy, overflow caps, and failure handling.
 
 The Service Definition exports `toolPairingBalancedBefore(session, seq)` and `toolPairingBalancedAfter(session, seq)` for the tool-call/result pairing checks before and after a seq. Both validate current surface membership and reject missing seqs and orphan results; the [package contract](../../packages/compaction/compaction/README.md#tool-pairing-boundaries) defines their cache behavior.
 
 ## Tool-result pruning outcomes
 
-The optional tool-result pruning service reports each durable content replacement and the aggregate Unicode-code-point reduction. Its public result types live in [`compaction-tool-result-pruner/src/types.ts`](../../packages/compaction/compaction-tool-result-pruner/src/types.ts).
+The optional tool-result pruning service reports each durable content replacement and the aggregate Unicode-code-point reduction, and estimates the request tokens a pass would free before it runs. Its public result types live in [`compaction-tool-result-pruner/src/types.ts`](../../packages/compaction/compaction-tool-result-pruner/src/types.ts).
 
 ```ts type-equiv
 /** Cited source event and size accounting for one landed surface replacement. */
@@ -129,6 +129,16 @@ interface PruneResult {
   readonly pruned: readonly PrunedEntry[]
   /** Total Unicode code points removed across replacements. */
   readonly charsRemoved: number
+}
+```
+
+```ts type-equiv
+/** Heuristic request-token effect of one replacement a pruning pass would land. */
+interface PruneEstimate {
+  /** Current tool-result surface node the pass would replace. */
+  readonly seq: SessionSeq
+  /** Fixed-heuristic tokens the replacement removes from the request. */
+  readonly tokensFreed: number
 }
 ```
 
@@ -245,6 +255,13 @@ pruneContent(blocks: readonly ContentBlock[]): ContentBlock[] | null
  * earlier in the pass remain durable.
  */
 pruneSession(session: Session): PruneResult
+
+/**
+ * Price, without appending, the replacements `pruneSession` would land now.
+ * @param session - session whose current surface is inspected.
+ * @returns one estimate per over-budget tool result, in surface order.
+ */
+estimateSession(session: Session): PruneEstimate[]
 ```
 
 Types: [ContentBlock](llm-streaming.md) · [Session](session.md)

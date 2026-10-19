@@ -57,7 +57,7 @@ kind: "package-reference"
 
 ### 修剪何时运行
 
-修剪只在压缩触发条件满足后运行：`dsh-compaction-basic` 在压力或溢出确认后、选择要压缩的内容之前调用它。低于压力时不会修剪任何内容，修剪本身也不发起模型调用。
+修剪只在压缩触发条件满足后运行。确认溢出后，`dsh-compaction-basic` 会在选择要压缩的内容之前修剪。压力触发时，只有当估算的节省足以抵偿提供方需重新预填充的请求后缀，或没有可压缩的内容时，它才会先修剪；否则在压缩之后修剪保留的尾部（[策略](../compaction-basic/README.zh.md#trimming-oversized-tool-outputs)）。低于压力时不会修剪任何内容，修剪本身也不发起模型调用。
 
 -----
 
@@ -79,15 +79,15 @@ kind: "package-reference"
 
 ### 剪枝机制
 
-剪枝按 Unicode 码点测量 `text` 块（非文本块计为零），生成长度受限的替换——内容已在预算内时则不替换——并把每个超出预算的工具结果换为一条新追加的 `tool/result`，该事件替换原始事件并通过 `sourceEventSeqs` 引用它，前面紧跟一条 `compaction/prune` 影子价格事件。会话拒绝替换时，运行会同步失败；本次扫描中先前已提交的替换仍会保留。非文本块保持原始相对位置，切片绝不会拆分 UTF-16 代理项对。精确签名见 [`src/index.ts`](src/index.ts)。
+剪枝按 Unicode 码点测量 `text` 块（非文本块计为零），生成长度受限的替换——内容已在预算内时则不替换——`estimateSession` 以启发式 token 为这些替换定价且不追加事件。`pruneSession` 把每个超出预算的工具结果换为一条新追加的 `tool/result`，该事件替换原始事件并通过 `sourceEventSeqs` 引用它，前面紧跟一条 `compaction/prune` 影子价格事件。会话拒绝替换时，运行会同步失败；本次扫描中先前已提交的替换仍会保留。非文本块保持原始相对位置，切片绝不会拆分 UTF-16 代理项对。精确签名见 [`src/index.ts`](src/index.ts)。
 
 ### 源码地图
 
 | 文件 | 职责 |
 |---|---|
-| [`src/index.ts`](src/index.ts) | 插件入口：`ToolResultPruner` 服务、`pruneSession` / `pruneContent` / `measureContent` |
+| [`src/index.ts`](src/index.ts) | 插件入口：`ToolResultPruner` 服务、`pruneSession` / `estimateSession` / `pruneContent` / `measureContent` |
 | [`src/config.ts`](src/config.ts) | `PRUNE_MARKER`、默认值、码点计数、预算验证 |
-| [`src/types.ts`](src/types.ts) | `ToolResultPruneConfig`、`ResolvedConfig`、`PrunedEntry`、`PruneResult` |
+| [`src/types.ts`](src/types.ts) | `ToolResultPruneConfig`、`ResolvedConfig`、`PrunedEntry`、`PruneEstimate`、`PruneResult` |
 
 </details>
 
@@ -98,7 +98,7 @@ kind: "package-reference"
 
 当包级约定不够用时阅读以下页面；它们从消费后端逐步进入共享 seam 与定价服务。
 
-- [压缩基础后端](../compaction-basic/README.zh.md)——在压缩前修剪超大工具输出的后端。
+- [压缩基础后端](../compaction-basic/README.zh.md)——决定何时修剪超大工具输出的后端。
 - [压缩 seam](../compaction/README.zh.md)——本包接入的压缩约定。
 - [压缩子系统参考](../../../docs/subsystems/compaction.zh.md)——压缩词汇、结果与服务行为。
 - [Token meter](../../llm/token-meter/README.zh.md)——判定修剪是否缓解压力的测量服务。
@@ -117,7 +117,7 @@ kind: "package-reference"
 
 #### Token 影响
 
-每个已改写工具结果最多包含 `thresholdChars` 个文本码点。剪枝本身不会发起模型调用；重新测量的请求低于压力阈值时，compaction-basic 会跳过摘要，否则摘要器会读取已剪枝的表层。
+每个已改写工具结果最多包含 `thresholdChars` 个文本码点。剪枝本身不会发起模型调用；摘要前的剪枝使重新测量的请求低于压力阈值时，compaction-basic 会跳过摘要。
 
 #### KV Cache 影响
 

@@ -2,7 +2,7 @@ import { imageOffloadProjection } from '@deepseek-ai/dsh-compaction-image-offloa
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { ToolCallId , createMessage, createToolResultMessage } from '@deepseek-ai/dsh-llm'
-import type { ContentBlock } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, Message } from '@deepseek-ai/dsh-llm'
 import {
   Session,
   SessionId,
@@ -264,6 +264,30 @@ describe('ToolResultPruner session transaction', () => {
       first.pruned.reduce((sum, entry) => sum + entry.charsBefore - entry.charsAfter, 0),
     )
     expect(second).toEqual({ pruned: [], charsRemoved: 0 })
+  })
+
+  it('estimates the pending replacements without appending', () => {
+    const session = Session.create(SessionId('estimate'))
+    const aSeq = appendToolStep(session, 1, 'a', [{ type: 'text', text: 'A'.repeat(100) }])
+    appendToolStep(session, 2, 'b', [{ type: 'text', text: 'short' }])
+    const cSeq = appendToolStep(session, 3, 'c', [{ type: 'text', text: 'C'.repeat(80) }])
+    session.append('turn/start', {
+      turn: 4,
+    })
+    const prune = service()
+    const logLength = session.seq
+    const before = session.deriveMessages()
+
+    const estimates = prune.estimateSession(session)
+    expect(session.seq).toBe(logLength)
+    expect(estimates.map(estimate => estimate.seq)).toEqual([aSeq, cSeq])
+
+    prune.pruneSession(session)
+    const price = (messages: readonly Message[]): number => messages
+      .reduce((sum, message) => sum + METER.estimateMessage(message), 0)
+    expect(estimates.reduce((sum, estimate) => sum + estimate.tokensFreed, 0))
+      .toBe(price(before) - price(session.deriveMessages()))
+    expect(prune.estimateSession(session)).toEqual([])
   })
 
   it('replays to the identical pruned model messages', () => {
