@@ -5,10 +5,17 @@
  * @module @deepseek-ai/dsh-experimental-tool-follow-up-task
  */
 
+import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
+import z from '@deepseek-ai/schemastery'
+import { defineTool } from '@deepseek-ai/dsh-tools'
+import { ToolCallId } from '@deepseek-ai/dsh-llm'
+import { SessionId } from '@deepseek-ai/dsh-session'
+import { delegationDepthOf } from '@deepseek-ai/dsh-subagent'
 // Type-only: resolves the required ctx.sessionProjections service declaration.
 import type {} from '@deepseek-ai/dsh-session-projection'
-import { followUpTasksProjection } from './projection.ts'
+import { followUpTasksProjection, SUGGEST_TOOL_NAME } from './projection.ts'
+import type { FollowUpTaskSuggestedMeta } from './contract.ts'
 
 export type * from './contract.ts'
 
@@ -17,11 +24,111 @@ export const name = 'tool-follow-up-task'
 /** Services required to register the follow-up task tools. */
 export const inject = ['tools', 'sessionProjections']
 
+/** Deployment configuration of the follow-up task tools. */
+export interface Config {
+  /** Most `suggest_follow_up_task` calls one turn may make; later calls in that turn fail. */
+  maxSuggestionsPerTurn: number
+}
+
+/** Schemastery configuration for the follow-up task tools. */
+export const Config: z<Config> = z.object({
+  maxSuggestionsPerTurn: z.natural().min(1).default(3)
+    .description('Most suggest_follow_up_task calls one turn may make; later calls in that turn fail.'),
+})
+
+const DESCRIPTION = 'Offer the user a follow-up task that they can start later as a new session. Use it for worthwhile work you notice outside the current request, such as a bug found in passing, missing test coverage, stale documentation, or a confirmed TODO, instead of doing that work now or only mentioning it. Do not use it for work the current request needs, for small fixes you can finish now, or for speculative ideas. Nothing runs unless the user starts the task; the user sees `title` and `summary` and reviews `prompt` before sending it. The new session cannot see this conversation, so `prompt` must stand alone: state the goal, the relevant file paths, what you observed, and how to verify the result.'
+
+const TITLE_DESCRIPTION = 'Imperative label of at most about 60 characters, such as "Fix the stale config example in README".'
+
+const SUMMARY_DESCRIPTION = 'One or two plain sentences for the user: what you noticed and what the task will do.'
+
+const PROMPT_DESCRIPTION = 'Complete instructions for the agent in the new session, which cannot see this conversation.'
+
+/** Refusal when the call has no owning Agent. */
+const AGENTLESS_REFUSAL = 'suggest_follow_up_task requires a calling agent.'
+
+/** Refusal when a delegated subagent calls the tool. */
+const SUBAGENT_REFUSAL = 'Only the top-level agent can suggest follow-up tasks; report this follow-up to your parent agent instead.'
+
+/** Misconfiguration refusal when the projection key is absent. */
+const MISSING_PROJECTION_REFUSAL = 'tool-follow-up-task: the followUpTasks projection is not registered'
+
 /**
- * Register the follow-up task tools in the mounting scope.
- * @param ctx - tool and session-projection registry scope.
+ * Refusal text for one empty task field.
+ * @param field - the empty parameter name.
+ * @returns the model-facing refusal message.
  */
-export function apply(ctx: Context): void {
+function emptyFieldRefusal(field: string): string {
+  return `${field} must not be empty.`
+}
+
+/**
+ * Refusal text for one call past the per-turn cap.
+ * @param max - the configured maximum for one turn.
+ * @returns the model-facing refusal message.
+ */
+function capRefusal(max: number): string {
+  return `At most ${max} follow-up tasks can be suggested per turn; keep only the most valuable ones.`
+}
+
+/**
+ * Register the follow-up task tools and the `followUpTasks` projection in the
+ * mounting scope.
+ * @param ctx - tool and session-projection registry scope.
+ * @param config - deployment's per-turn suggestion limit.
+ */
+export function apply(ctx: Context, config: Config): void {
   ctx.sessionProjections.register(followUpTasksProjection)
-  // FIXME(U2-U3): register both tools; see tmp/follow-up-tasks/units/U2-U3.
+  ctx.tools.register(defineTool({
+    name: SUGGEST_TOOL_NAME,
+    description: DESCRIPTION,
+    parameters: {
+      title: { type: 'string', required: true, description: TITLE_DESCRIPTION },
+      summary: { type: 'string', required: true, description: SUMMARY_DESCRIPTION },
+      prompt: { type: 'string', required: true, description: PROMPT_DESCRIPTION },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          taskId: { type: 'string', required: true },
+          sessionId: { type: 'string', required: true },
+        },
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: `Follow-up task ${value.taskId} is shown to the user and starts only if they choose to. Continue with the current request.`,
+      }],
+      presentationMeta: (args, value) => ({
+        type: 'follow-up-task.suggested',
+        taskId: ToolCallId(value.taskId),
+        sessionId: SessionId(value.sessionId),
+        title: args.title.trim(),
+        summary: args.summary.trim(),
+        prompt: args.prompt.trim(),
+      } satisfies FollowUpTaskSuggestedMeta),
+    },
+    presentCall: args => ({ card: 'generic', title: 'Suggest follow-up task', kind: 'other', rawInput: args }),
+    execute(args, exec) {
+      const agent = exec.agent
+      if (agent === undefined) throw new Error(AGENTLESS_REFUSAL)
+      if (delegationDepthOf(agent) > 0) throw new Error(SUBAGENT_REFUSAL)
+      const title = args.title.trim()
+      if (title.length === 0) throw new Error(emptyFieldRefusal('title'))
+      const summary = args.summary.trim()
+      if (summary.length === 0) throw new Error(emptyFieldRefusal('summary'))
+      const prompt = args.prompt.trim()
+      if (prompt.length === 0) throw new Error(emptyFieldRefusal('prompt'))
+      const state = ctx.sessionProjections.stateOf(agent.session, 'followUpTasks')
+      if (state === undefined) throw new Error(MISSING_PROJECTION_REFUSAL)
+      if (state.openTurnCalls !== null) {
+        const index = state.openTurnCalls.indexOf(exec.callId)
+        const position = index === -1 ? state.openTurnCalls.length + 1 : index + 1
+        if (position > config.maxSuggestionsPerTurn) throw new Error(capRefusal(config.maxSuggestionsPerTurn))
+      }
+      return Promise.resolve({ taskId: exec.callId, sessionId: SessionId(`session-${randomUUID()}`) })
+    },
+  }))
+  // FIXME(U3): register dismiss_follow_up_task; see tmp/follow-up-tasks/units/U3.
 }
