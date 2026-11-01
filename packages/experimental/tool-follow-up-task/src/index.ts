@@ -6,18 +6,22 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+// Type-only: resolves the required ctx.sessionProjections service declaration.
+import type {} from '@deepseek-ai/dsh-session-projection'
+import { followUpTasksProjection } from './projection.ts'
 
 export type * from './contract.ts'
 
 /** Cordis plugin name. */
 export const name = 'tool-follow-up-task'
 /** Services required to register the follow-up task tools. */
-export const inject = ['tools']
+export const inject = ['tools', 'sessionProjections']
 
 /**
  * Register the follow-up task tools in the mounting scope.
- * @param _ctx - tool registry scope.
+ * @param ctx - tool and session-projection registry scope.
  */
-export function apply(_ctx: Context): void {
-  // FIXME(U1-U3): register the followUpTasks projection and both tools; see tmp/follow-up-tasks/units/U1-U3.
+export function apply(ctx: Context): void {
+  ctx.sessionProjections.register(followUpTasksProjection)
+  // FIXME(U2-U3): register both tools; see tmp/follow-up-tasks/units/U2-U3.
 }
