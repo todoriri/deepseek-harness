@@ -11,11 +11,13 @@ import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import type { Session } from '@deepseek-ai/dsh-session'
 import { delegationDepthOf } from '@deepseek-ai/dsh-subagent'
 // Type-only: resolves the required ctx.sessionProjections service declaration.
 import type {} from '@deepseek-ai/dsh-session-projection'
 import { followUpTasksProjection, SUGGEST_TOOL_NAME } from './projection.ts'
-import type { FollowUpTaskSuggestedMeta } from './contract.ts'
+import type { FollowUpTasksState } from './projection.ts'
+import type { FollowUpTaskDismissedMeta, FollowUpTaskSuggestedMeta } from './contract.ts'
 
 export type * from './contract.ts'
 
@@ -44,14 +46,36 @@ const SUMMARY_DESCRIPTION = 'One or two plain sentences for the user: what you n
 
 const PROMPT_DESCRIPTION = 'Complete instructions for the agent in the new session, which cannot see this conversation.'
 
+const DISMISS_DESCRIPTION = 'Withdraw a follow-up task you suggested earlier in this session when it is no longer needed, for example because it was done here or a better suggestion replaced it. Pass the `taskId` that suggest_follow_up_task returned. A session the user already started is not affected.'
+
+const TASK_ID_DESCRIPTION = 'The taskId returned by suggest_follow_up_task.'
+
 /** Refusal when the call has no owning Agent. */
 const AGENTLESS_REFUSAL = 'suggest_follow_up_task requires a calling agent.'
 
 /** Refusal when a delegated subagent calls the tool. */
 const SUBAGENT_REFUSAL = 'Only the top-level agent can suggest follow-up tasks; report this follow-up to your parent agent instead.'
 
+/** Refusal when the dismiss call has no owning Agent. */
+const DISMISS_AGENTLESS_REFUSAL = 'dismiss_follow_up_task requires a calling agent.'
+
+/** Refusal when a delegated subagent calls the dismiss tool. */
+const DISMISS_SUBAGENT_REFUSAL = 'Only the top-level agent can dismiss follow-up tasks.'
+
 /** Misconfiguration refusal when the projection key is absent. */
 const MISSING_PROJECTION_REFUSAL = 'tool-follow-up-task: the followUpTasks projection is not registered'
+
+/**
+ * Read the `followUpTasks` projection state or fail as misconfigured.
+ * @param ctx - hosting context carrying the session-projection registry.
+ * @param session - Session whose fold supplies the suggesting history.
+ * @returns the current fold state.
+ */
+function requireFollowUpTasksState(ctx: Context, session: Session): FollowUpTasksState {
+  const state = ctx.sessionProjections.stateOf(session, 'followUpTasks')
+  if (state === undefined) throw new Error(MISSING_PROJECTION_REFUSAL)
+  return state
+}
 
 /**
  * Refusal text for one empty task field.
@@ -69,6 +93,15 @@ function emptyFieldRefusal(field: string): string {
  */
 function capRefusal(max: number): string {
   return `At most ${max} follow-up tasks can be suggested per turn; keep only the most valuable ones.`
+}
+
+/**
+ * Refusal text for one task id that this Session never recorded.
+ * @param taskId - the unrecognized task id.
+ * @returns the model-facing refusal message.
+ */
+function unknownTaskRefusal(taskId: string): string {
+  return `No follow-up task with taskId ${taskId} was suggested in this session.`
 }
 
 /**
@@ -120,8 +153,7 @@ export function apply(ctx: Context, config: Config): void {
       if (summary.length === 0) throw new Error(emptyFieldRefusal('summary'))
       const prompt = args.prompt.trim()
       if (prompt.length === 0) throw new Error(emptyFieldRefusal('prompt'))
-      const state = ctx.sessionProjections.stateOf(agent.session, 'followUpTasks')
-      if (state === undefined) throw new Error(MISSING_PROJECTION_REFUSAL)
+      const state = requireFollowUpTasksState(ctx, agent.session)
       if (state.openTurnCalls !== null) {
         const index = state.openTurnCalls.indexOf(exec.callId)
         const position = index === -1 ? state.openTurnCalls.length + 1 : index + 1
@@ -130,5 +162,37 @@ export function apply(ctx: Context, config: Config): void {
       return Promise.resolve({ taskId: exec.callId, sessionId: SessionId(`session-${randomUUID()}`) })
     },
   }))
-  // FIXME(U3): register dismiss_follow_up_task; see tmp/follow-up-tasks/units/U3.
+  ctx.tools.register(defineTool({
+    name: 'dismiss_follow_up_task',
+    description: DISMISS_DESCRIPTION,
+    parameters: {
+      taskId: { type: 'string', required: true, description: TASK_ID_DESCRIPTION },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          taskId: { type: 'string', required: true },
+        },
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: `Follow-up task ${value.taskId} is withdrawn.`,
+      }],
+      presentationMeta: (_args, value) => ({
+        type: 'follow-up-task.dismissed',
+        taskId: ToolCallId(value.taskId),
+      } satisfies FollowUpTaskDismissedMeta),
+    },
+    presentCall: args => ({ card: 'generic', title: 'Dismiss follow-up task', kind: 'other', rawInput: args }),
+    execute(args, exec) {
+      const agent = exec.agent
+      if (agent === undefined) throw new Error(DISMISS_AGENTLESS_REFUSAL)
+      if (delegationDepthOf(agent) > 0) throw new Error(DISMISS_SUBAGENT_REFUSAL)
+      const state = requireFollowUpTasksState(ctx, agent.session)
+      if (!state.suggested.includes(args.taskId)) throw new Error(unknownTaskRefusal(args.taskId))
+      return Promise.resolve({ taskId: args.taskId })
+    },
+  }))
 }
