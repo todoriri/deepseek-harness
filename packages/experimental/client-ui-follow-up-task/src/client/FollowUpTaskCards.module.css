@@ -75,8 +75,6 @@
   cursor: pointer;
 }
 
-.action:hover { background: var(--dsw-static-neutral-100); }
-:global(body[data-ds-dark-theme]) .action:hover { background: var(--dsw-static-neutral-800); }
 .action:focus-visible,
 .disclosure:focus-visible { outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: 2px; }
 
@@ -91,7 +89,12 @@
   cursor: pointer;
 }
 
-.disclosure:hover { color: var(--dsw-alias-label-primary); }
+/* A touch tap latches `:hover`; without the guard a tapped button keeps its hover fill. */
+@media (hover: hover) {
+  .action:hover { background: var(--dsw-static-neutral-100); }
+  :global(body[data-ds-dark-theme]) .action:hover { background: var(--dsw-static-neutral-800); }
+  .disclosure:hover { color: var(--dsw-alias-label-primary); }
+}
 
 .prompt {
   margin: 2px 0 0;
