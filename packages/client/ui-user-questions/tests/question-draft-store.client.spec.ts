@@ -73,4 +73,54 @@ describe('createQuestionDraftStore', () => {
 
     expect(store.getSnapshot()).toEqual({ progressByRequest: { 'question:session-one:call-live': FIRST } })
   })
+
+  it('restores well-formed request drafts and drops each malformed one', () => {
+    const answer = FIRST.drafts[0]!
+    const valid = {
+      'question:first': FIRST,
+      'question:waiting': { index: 0, drafts: [], wait: 'waiting' },
+      'question:editing': { ...FIRST, wait: 'editing' },
+    }
+    const malformed: Record<string, unknown> = {
+      'question:null': null,
+      'question:no-index': { drafts: [] },
+      'question:no-drafts': { index: 0 },
+      'question:index-text': { ...FIRST, index: '1' },
+      'question:index-fraction': { ...FIRST, index: 0.5 },
+      'question:index-negative': { ...FIRST, index: -1 },
+      'question:drafts-object': { ...FIRST, drafts: {} },
+      'question:answer-null': { ...FIRST, drafts: [null] },
+      'question:answer-fields': { ...FIRST, drafts: [{ selected: [] }] },
+      'question:answer-selected': { ...FIRST, drafts: [{ ...answer, selected: 'Fast' }] },
+      'question:answer-label': { ...FIRST, drafts: [{ ...answer, selected: [1] }] },
+      'question:answer-custom': { ...FIRST, drafts: [{ ...answer, custom: null }] },
+      'question:answer-skipped': { ...FIRST, drafts: [{ ...answer, skipped: 'no' }] },
+      'question:wait': { ...FIRST, wait: 'paused' },
+    }
+    const stored = JSON.stringify({ progressByRequest: { ...valid, ...malformed } })
+    vi.stubGlobal('localStorage', { getItem: () => stored, setItem: () => {}, removeItem: () => {} })
+    try {
+      expect(createQuestionDraftStore().create('session-one').getSnapshot()).toEqual({ progressByRequest: valid })
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it.each([null, 'drafts', {}, { progressByRequest: null }, { progressByRequest: [] }])(
+    'starts without drafts when storage holds %j',
+    (saved) => {
+      const stored = JSON.stringify(saved)
+      vi.stubGlobal('localStorage', { getItem: () => stored, setItem: () => {}, removeItem: () => {} })
+      const report = vi.spyOn(console, 'error').mockImplementation(() => {})
+      try {
+        expect(createQuestionDraftStore().create('session-one').getSnapshot()).toEqual({ progressByRequest: {} })
+        expect(report).toHaveBeenCalledWith(
+          "snapshot store 'dsh.user-questions.drafts.v1.session-one' kept its initial state: the persisted value is invalid",
+        )
+      } finally {
+        report.mockRestore()
+        vi.unstubAllGlobals()
+      }
+    },
+  )
 })

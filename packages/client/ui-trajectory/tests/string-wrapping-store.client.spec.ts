@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, expect, it } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { createTrajectoryStringWrappingStore } from '../src/client/string-wrapping-store.ts'
 
 const key = 'dsh.trajectory.jsonStringWrapping'
@@ -23,4 +23,13 @@ it('restores the last wrapping choice when the view is recreated', () => {
   expect(second.getSnapshot()).toBe(true)
   second.set(false)
   expect(createTrajectoryStringWrappingStore().getSnapshot()).toBe(false)
+})
+
+it.each(['null', '"true"', '1', '{}'])('starts unwrapped when the stored preference %s is not a boolean', (stored) => {
+  localStorage.setItem(key, stored)
+  const report = vi.spyOn(console, 'error').mockImplementation(() => {})
+  try {
+    expect(createTrajectoryStringWrappingStore().getSnapshot()).toBe(false)
+    expect(report).toHaveBeenCalledOnce()
+  } finally { report.mockRestore() }
 })

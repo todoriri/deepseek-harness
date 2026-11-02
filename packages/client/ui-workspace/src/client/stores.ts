@@ -68,6 +68,48 @@ type WorkspaceViewActions = {
   setArchivedFilter: (draft: WorkspaceViewState, filter: ArchivedFilter) => void
 }
 
+const GROUP_BY_MODES: readonly SessionGroupBy[] = ['workspace', 'workspace-tree', 'flat']
+const ORDER_BY_MODES: readonly SessionOrderBy[] = ['manual', 'updated']
+const ARCHIVED_FILTERS: readonly ArchivedFilter[] = ['default', 'show', 'only']
+
+/** Admit a stored object record whose every value passes `admit`. */
+function parseRecord<V>(value: unknown, admit: (entry: unknown) => entry is V): Record<string, V> | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const entries: [string, unknown][] = Object.entries(value)
+  const admitted: [string, V][] = []
+  for (const [key, entry] of entries) {
+    if (!admit(entry)) return undefined
+    admitted.push([key, entry])
+  }
+  return Object.fromEntries(admitted)
+}
+
+const isBoolean = (entry: unknown): entry is boolean => typeof entry === 'boolean'
+
+function isStringArray(entry: unknown): entry is string[] {
+  return Array.isArray(entry) && entry.every((id: unknown) => typeof id === 'string')
+}
+
+/**
+ * Admit stored viewing state. The state is one browser preference, so a
+ * malformed field discards the whole value; fields outside the current
+ * state, such as the obsolete timestamp ledger, are dropped.
+ */
+function parseWorkspaceView(value: unknown): WorkspaceViewState | undefined {
+  if (typeof value !== 'object' || value === null || !('groupBy' in value) || !('orderBy' in value)
+    || !('groupExpansion' in value) || !('sessionOrderByAccount' in value)) return undefined
+  const groupBy = GROUP_BY_MODES.find(mode => mode === value.groupBy)
+  const orderBy = ORDER_BY_MODES.find(mode => mode === value.orderBy)
+  const groupExpansion = parseRecord(value.groupExpansion, isBoolean)
+  const sessionOrderByAccount = parseRecord(value.sessionOrderByAccount, isStringArray)
+  if (groupBy === undefined || orderBy === undefined || groupExpansion === undefined
+    || sessionOrderByAccount === undefined) return undefined
+  const state: WorkspaceViewState = { groupBy, orderBy, groupExpansion, sessionOrderByAccount }
+  if (!('archivedFilter' in value)) return state
+  const archivedFilter = ARCHIVED_FILTERS.find(filter => filter === value.archivedFilter)
+  return archivedFilter === undefined ? undefined : { ...state, archivedFilter }
+}
+
 /** Copy read-only projections into the persisted mutable store representation. */
 function copySessionOrders(
   orders: Readonly<Record<string, readonly string[]>>,
@@ -88,7 +130,7 @@ export function createWorkspaceViewStore(): EngineStoreHandle<WorkspaceViewState
       sessionOrderByAccount: {},
       archivedFilter: 'default',
     }),
-    persist: 'dsh.workspace.view.v5',
+    persist: { name: 'dsh.workspace.view.v5', parse: parseWorkspaceView },
     actions: {
       setGroupBy: (d, mode: SessionGroupBy) => { d.groupBy = mode },
       setOrderBy: (d, mode: SessionOrderBy, initialOrders) => {
@@ -105,7 +147,6 @@ export function createWorkspaceViewStore(): EngineStoreHandle<WorkspaceViewState
         d.sessionOrderByAccount = Object.fromEntries(
           Object.entries(d.sessionOrderByAccount).filter(([key]) => retained.has(key)),
         )
-        delete (d as WorkspaceViewState & { sessionUpdatedAtByAccount?: unknown }).sessionUpdatedAtByAccount
       },
       syncSessionOrders: (d, orders) => {
         if (d.orderBy !== 'manual') return

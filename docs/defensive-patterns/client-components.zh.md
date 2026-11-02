@@ -230,10 +230,10 @@ export function useTabStream(id: string) {
 
 ## Store 用法窄而明确
 
-前端 store 承载共享的查看或交互状态。它的 spec 声明初始状态、改动这些状态的 action，以及在值需要跨重载存活时由框架机械执行的持久化键——session 作用域的实例会在该键上追加 scope key，因此每个会话的实例各自独立持久化。store 的属性与改动这些属性的 action 被封装成窄接口注入，组件只拿到这些以及它需要的选择器，绝不拿整个 view store。业务数据住在对象层而不是 store 里，设置变更走设置接口，不走 store 状态。
+前端 store 承载共享的查看或交互状态。它的 spec 声明初始状态、改动这些状态的 action，以及在值需要跨重载存活时由框架机械执行的持久化键与已存值解析函数——session 作用域的实例会在该键上追加 scope key，因此每个会话的实例各自独立持久化。store 的属性与改动这些属性的 action 被封装成窄接口注入，组件只拿到这些以及它需要的选择器，绝不拿整个 view store。业务数据住在对象层而不是 store 里，设置变更走设置接口，不走 store 状态。
 
 - 判定方式：注入面是窄接口还是 store 对象本身，以及句柄是在 `apply` 内构建还是在模块级构建。
-- 持久化：spec 的 `persist` 键就是全部机制，由框架执行；引擎实例暴露 `getSnapshot`、`subscribe`、烘焙好的 actions 与 `clearPersisted`，没有任何一方手工 hydrate。
+- 持久化：spec 的 `persist` 键与 `parse` 函数就是全部机制，由框架执行；`parse` 接收任意 JSON 值，返回要装入的状态或 undefined，因此其他 Client 版本写入的值不会未经检查就到达读取方；引擎实例暴露 `getSnapshot`、`subscribe`、烘焙好的 actions 与 `clearPersisted`，没有任何一方手工 hydrate。
 - 不在范围内：不改设置时，渲染状态放 store 没问题；组件局部状态也不是 store 内容。[Store 契约](../subsystems/slots.zh.md#component-inputs) 正家负责声明的 store 如何变成 props，[Web 客户端架构](../subsystems/web-client.zh.md) 正家负责业务数据住在哪里。
 - 例外：在模块级导出 store 句柄一律禁止——模块缓存的身份在插件重载之间是一个伪装的单例；把注入面收窄成窄接口不需要单独批准。
 - 修法：把 inject 返回值里的 store 句柄换成组件渲染所需的字段与 action 回调，句柄留在 `apply` 内。
@@ -241,8 +241,8 @@ export function useTabStream(id: string) {
 一个句柄在 `apply` 内构建并传给注册项，inject 面只带视图渲染所需的字段与 action：
 
 ```tsx
-// The handle is built in apply; persistence is the spec's own key.
-const sidebarStore = createSidebarStore()   // defineStore({ init, actions, persist: 'sidebar' })
+// The handle is built in apply; persistence is the spec's own key and parser.
+const sidebarStore = createSidebarStore()   // defineStore({ init, actions, persist: { name: 'sidebar', parse } })
 
 ctx.slots.register(
   { name: 'sidebar.header', store: sidebarStore, inject: () => ({ onSelect: selectPanel }) },

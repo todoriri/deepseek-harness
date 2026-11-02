@@ -126,6 +126,16 @@ export type RegistryChoice =
 /** The choice shown until the Host has said which registry it asks first: the one pnpm's own configuration names. */
 const OFFICIAL_REGISTRY: RegistryChoice = { kind: 'offered', registry: null }
 
+/** Admit a remembered registry choice from browser storage; null records that none was remembered. */
+function parseRememberedRegistry(value: unknown): RegistryChoice | null | undefined {
+  if (value === null) return null
+  if (typeof value !== 'object' || !('kind' in value)) return undefined
+  if (value.kind === 'custom') return 'url' in value && typeof value.url === 'string' ? { kind: 'custom', url: value.url } : undefined
+  if (value.kind !== 'offered' || !('registry' in value)) return undefined
+  const { registry } = value
+  return registry === null || typeof registry === 'string' ? { kind: 'offered', registry } : undefined
+}
+
 /** Hold the manual-refresh spinner at least this long so a fast read does not flash it. */
 const REFRESH_SPINNER_MIN_MS = 400
 
@@ -566,7 +576,7 @@ export class PluginManagerController {
   private transientRegistry = false
   /** The registry last used from this browser, kept across dialogs and page loads; null until one was used. */
   private readonly registryMemory: SnapshotStore<RegistryChoice | null> = createSnapshotStore<RegistryChoice | null>(null, {
-    persist: { name: 'dsh.plugin-manager.install-registry' },
+    persist: { name: 'dsh.plugin-manager.install-registry', parse: parseRememberedRegistry },
   })
 
   /**

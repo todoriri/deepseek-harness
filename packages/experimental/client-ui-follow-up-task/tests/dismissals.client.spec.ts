@@ -2,7 +2,7 @@
 /** `createDismissalStore` keeps the most recent dismissed Session ids in localStorage. */
 
 import { SessionId } from '@deepseek-ai/dsh-session/types'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createDismissalStore } from '../src/client/dismissals.ts'
 
 const STORAGE_KEY = 'dsh.follow-up-task.dismissed.v1'
@@ -71,19 +71,21 @@ describe('createDismissalStore', () => {
   it.each([
     ['a string', '"session-one"'],
     ['an object', '{"session-one":true}'],
-  ])('restores %s stored under the key as no dismissals and repairs the stored value', (_kind, raw) => {
+  ])('restores %s stored under the key as no dismissals', (_kind, raw) => {
     localStorage.setItem(STORAGE_KEY, raw)
-    const store = createDismissalStore()
-    expect(store.getSnapshot()).toEqual([])
-    expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!)).toEqual([])
-    store.dismiss(sessionId('session-two'))
-    expect(store.getSnapshot()).toEqual(['session-two'])
+    const report = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const store = createDismissalStore()
+      expect(store.getSnapshot()).toEqual([])
+      expect(report).toHaveBeenCalledOnce()
+      store.dismiss(sessionId('session-two'))
+      expect(store.getSnapshot()).toEqual(['session-two'])
+    } finally { report.mockRestore() }
   })
 
   it('drops non-string entries from the stored ids', () => {
     localStorage.setItem(STORAGE_KEY, '["session-one", 7, null, {"id": "session-two"}]')
     const store = createDismissalStore()
     expect(store.getSnapshot()).toEqual(['session-one'])
-    expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!)).toEqual(['session-one'])
   })
 })

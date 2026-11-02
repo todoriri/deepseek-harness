@@ -8,6 +8,28 @@ interface State {
 
 const init = (): State => ({ a: { n: 1 }, b: { list: ['x'] } })
 
+/** Admit a stored State whose leaves carry the declared types. */
+function parseState(value: unknown): State | undefined {
+  if (typeof value !== 'object' || value === null || !('a' in value) || !('b' in value)) return undefined
+  const { a, b } = value
+  if (typeof a !== 'object' || a === null || !('n' in a) || typeof a.n !== 'number') return undefined
+  if (typeof b !== 'object' || b === null || !('list' in b) || !Array.isArray(b.list)) return undefined
+  const list: unknown[] = b.list
+  return list.every((item): item is string => typeof item === 'string') ? { a: { n: a.n }, b: { list } } : undefined
+}
+
+const parseString = (value: unknown): string | undefined => typeof value === 'string' ? value : undefined
+
+/** Back localStorage with a map for one spec. */
+function stubStorage(backing = new Map<string, string>()): Map<string, string> {
+  vi.stubGlobal('localStorage', {
+    getItem: (k: string) => backing.get(k) ?? null,
+    setItem: (k: string, v: string) => { backing.set(k, v) },
+    removeItem: (k: string) => { backing.delete(k) },
+  })
+  return backing
+}
+
 afterEach(() => {
   vi.unstubAllGlobals()
   vi.unstubAllEnvs()
@@ -124,30 +146,72 @@ describe('createSnapshotStore', () => {
   })
 
   it('rehydrates primitive state whole, not spread into index keys', () => {
-    const backing = new Map<string, string>()
-    vi.stubGlobal('localStorage', {
-      getItem: (k: string) => backing.get(k) ?? null,
-      setItem: (k: string, v: string) => { backing.set(k, v) },
-      removeItem: (k: string) => { backing.delete(k) },
-    })
-    const store = createSnapshotStore<string>('', { persist: { name: 'spec-draft' } })
+    stubStorage()
+    const store = createSnapshotStore<string>('', { persist: { name: 'spec-draft', parse: parseString } })
     store.set('hello')
-    const revived = createSnapshotStore<string>('', { persist: { name: 'spec-draft' } })
+    const revived = createSnapshotStore<string>('', { persist: { name: 'spec-draft', parse: parseString } })
     expect(revived.getSnapshot()).toBe('hello')
   })
 
   it('persists to localStorage under the given name and rehydrates', () => {
-    const backing = new Map<string, string>()
-    vi.stubGlobal('localStorage', {
-      getItem: (k: string) => backing.get(k) ?? null,
-      setItem: (k: string, v: string) => { backing.set(k, v) },
-      removeItem: (k: string) => { backing.delete(k) },
-    })
-    const store = createSnapshotStore(init(), { persist: { name: 'spec-store' } })
+    const backing = stubStorage()
+    const store = createSnapshotStore(init(), { persist: { name: 'spec-store', parse: parseState } })
     store.update((d) => { d.a.n = 42 })
     expect(backing.has('spec-store')).toBe(true)
-    const revived = createSnapshotStore(init(), { persist: { name: 'spec-store' } })
+    const revived = createSnapshotStore(init(), { persist: { name: 'spec-store', parse: parseState } })
     expect(revived.getSnapshot().a.n).toBe(42)
+  })
+
+  it.each(['null', '"text"', '[1]', '{"a":{"n":"2"},"b":{"list":[]}}'])(
+    'keeps the initial state when parse rejects the stored JSON %s',
+    (stored) => {
+      const backing = stubStorage(new Map([['spec-corrupt', stored]]))
+      const report = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+      const store = createSnapshotStore(init(), { persist: { name: 'spec-corrupt', parse: parseState } })
+
+      expect(store.getSnapshot()).toEqual(init())
+      expect(report).toHaveBeenCalledWith(
+        "snapshot store 'spec-corrupt' kept its initial state: the persisted value is invalid",
+      )
+      expect(backing.get('spec-corrupt')).toBe(stored)
+      store.update((draft) => { draft.a.n = 3 })
+      expect(JSON.parse(backing.get('spec-corrupt')!)).toEqual({ a: { n: 3 }, b: { list: ['x'] } })
+    },
+  )
+
+  it('installs the repaired value parse returns without rewriting storage', () => {
+    const stored = JSON.stringify({ a: { n: 5, extra: true }, b: { list: ['y'] } })
+    const backing = stubStorage(new Map([['spec-repair', stored]]))
+
+    const store = createSnapshotStore(init(), { persist: { name: 'spec-repair', parse: parseState } })
+
+    expect(store.getSnapshot()).toEqual({ a: { n: 5 }, b: { list: ['y'] } })
+    expect(Object.isFrozen(store.getSnapshot().a)).toBe(true)
+    expect(backing.get('spec-repair')).toBe(stored)
+  })
+
+  it('reports invalid JSON and a throwing parser as rehydration failures', () => {
+    stubStorage(new Map([['spec-bad-json', '{'], ['spec-bad-parser', '1']]))
+    const report = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const failure = new Error('parser failed')
+
+    const badJson = createSnapshotStore(init(), { persist: { name: 'spec-bad-json', parse: parseState } })
+    const badParser = createSnapshotStore(init(), {
+      persist: { name: 'spec-bad-parser', parse: () => { throw failure } },
+    })
+
+    expect(badJson.getSnapshot()).toEqual(init())
+    expect(badParser.getSnapshot()).toEqual(init())
+    expect(report).toHaveBeenCalledWith("snapshot store 'spec-bad-json' rehydration failed:", expect.any(SyntaxError))
+    expect(report).toHaveBeenCalledWith("snapshot store 'spec-bad-parser' rehydration failed:", failure)
+  })
+
+  it('requires a parser that accepts any JSON value', () => {
+    const narrow = (value: string): string => value
+    // @ts-expect-error parse receives unknown, so a string-only parser cannot admit stored values.
+    const declare = () => createSnapshotStore('', { persist: { name: 'spec-narrow', parse: narrow } })
+    expect(declare).toBeTypeOf('function')
   })
 
   it('reports rehydration failures without preventing store creation', () => {
@@ -159,7 +223,7 @@ describe('createSnapshotStore', () => {
     })
     const report = vi.spyOn(console, 'error').mockImplementation(() => {})
 
-    const store = createSnapshotStore(init(), { persist: { name: 'spec-broken-read' } })
+    const store = createSnapshotStore(init(), { persist: { name: 'spec-broken-read', parse: parseState } })
 
     expect(store.getSnapshot()).toEqual(init())
     expect(report).toHaveBeenCalledWith(
@@ -176,7 +240,7 @@ describe('createSnapshotStore', () => {
       removeItem: () => {},
     })
     const report = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const store = createSnapshotStore(init(), { persist: { name: 'spec-broken-write' } })
+    const store = createSnapshotStore(init(), { persist: { name: 'spec-broken-write', parse: parseState } })
 
     expect(() => { store.update((draft) => { draft.a.n = 7 }) }).not.toThrow()
     expect(store.getSnapshot().a.n).toBe(7)
@@ -188,6 +252,14 @@ describe('createSnapshotStore', () => {
 })
 
 describe('defineStore', () => {
+  const parseDraft = (value: unknown): { draft: string } | undefined =>
+    typeof value === 'object' && value !== null && 'draft' in value && typeof value.draft === 'string'
+      ? { draft: value.draft }
+      : undefined
+  const parseCount = (value: unknown): { n: number } | undefined =>
+    typeof value === 'object' && value !== null && 'n' in value && typeof value.n === 'number'
+      ? { n: value.n }
+      : undefined
   const declare = () => defineStore({
     init: () => ({ selection: null as string | null, draft: '' }),
     actions: {
@@ -230,15 +302,10 @@ describe('defineStore', () => {
   })
 
   it('suffixes the persist key with the scope key: per-session persistence plus clearPersisted cleanup', () => {
-    const backing = new Map<string, string>()
-    vi.stubGlobal('localStorage', {
-      getItem: (k: string) => backing.get(k) ?? null,
-      setItem: (k: string, v: string) => { backing.set(k, v) },
-      removeItem: (k: string) => { backing.delete(k) },
-    })
+    const backing = stubStorage()
     const handle = defineStore({
       init: () => ({ draft: '' }),
-      persist: 'spec.chat',
+      persist: { name: 'spec.chat', parse: parseDraft },
       actions: { setDraft: (d, text: string) => { d.draft = text } },
     })
     handle.create('s1').actions.setDraft('one')
@@ -256,12 +323,25 @@ describe('defineStore', () => {
     expect(backing.has('spec.chat')).toBe(true)
   })
 
+  it('runs the declared parser on scoped and root keys', () => {
+    stubStorage(new Map([['spec.parsed.s1', '{"draft":7}'], ['spec.parsed', '{"draft":"root"}']]))
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const handle = defineStore({
+      init: () => ({ draft: '' }),
+      persist: { name: 'spec.parsed', parse: parseDraft },
+      actions: {},
+    })
+
+    expect(handle.create('s1').getSnapshot()).toEqual({ draft: '' })
+    expect(handle.create().getSnapshot()).toEqual({ draft: 'root' })
+  })
+
   it('clearPersisted is a no-op without a persist declaration or without storage', () => {
     const inst = declare().create('s1')   // no persist key declared
     expect(() => { inst.clearPersisted() }).not.toThrow()
     const persisting = defineStore({
       init: () => ({ n: 0 }),
-      persist: 'spec.nostorage',
+      persist: { name: 'spec.nostorage', parse: parseCount },
       actions: { inc: (d) => { d.n += 1 } },
     }).create()
     // jsdom-less lane: localStorage may exist here, so simulate its absence.
@@ -277,7 +357,7 @@ describe('defineStore', () => {
     })
     const inst = defineStore({
       init: () => ({ n: 0 }),
-      persist: 'spec.throwing',
+      persist: { name: 'spec.throwing', parse: parseCount },
       actions: { inc: (d) => { d.n += 1 } },
     }).create()
     expect(() => { inst.clearPersisted() }).not.toThrow()

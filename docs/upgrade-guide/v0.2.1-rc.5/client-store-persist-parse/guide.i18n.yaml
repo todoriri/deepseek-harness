@@ -1,0 +1,16 @@
+# Bilingual-pair consistency record for guide.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/upgrade-guide/v0.2.1-rc.5/client-store-persist-parse/guide.md
+/:
+  en: 2265d2ea31c04373
+  zh: e3e5bad8a4c600cf
+/persisted-client-stores-require-a-stored-value-parser:
+  en: ce43622ef3e7ac68
+  zh: 84c4ae80f29e0905
+/persisted-client-stores-require-a-stored-value-parser/change:
+  en: 059ab4cec46b0976
+  zh: 072cb52c163526b2
+/persisted-client-stores-require-a-stored-value-parser/migration:
+  en: 2c9a77d2adc6c9e5
+  zh: 48b90b7bb451e01c

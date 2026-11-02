@@ -98,9 +98,15 @@ it('keeps device choices available after permission denial', async () => {
   } finally { b.unmount(); await Promise.all(b.recordings.map(recording => recording.dispose())) }
 })
 
-it.each([null, 'usb', { id: 3, label: 'USB' }, { id: 'usb' }])('ignores invalid persisted microphone fields: %j', (saved) => {
+it.each([null, 'usb', { id: 3, label: 'USB' }, { id: 'usb' }, { id: 'usb', label: null }])('ignores invalid persisted microphone fields: %j', (saved) => {
   localStorage.setItem('dsh.voice-input.microphone', JSON.stringify(saved))
-  expect(createMicrophoneDeviceStore().getSnapshot()).toEqual({ id: '', label: '' })
+  const report = vi.spyOn(console, 'error').mockImplementation(() => {})
+  try {
+    expect(createMicrophoneDeviceStore().getSnapshot()).toEqual({ id: '', label: '' })
+    expect(report).toHaveBeenCalledWith(
+      "snapshot store 'dsh.voice-input.microphone' kept its initial state: the persisted value is invalid",
+    )
+  } finally { report.mockRestore() }
 })
 
 it('stops preview on page hiding and releases tracks even when AudioContext closure fails', async () => {

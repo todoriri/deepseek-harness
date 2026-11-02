@@ -68,7 +68,7 @@ function fakeHandle(persist?: string) {
     spec: {
       init: () => undefined,
       actions: {},
-      ...(persist === undefined ? {} : { persist }),
+      ...(persist === undefined ? {} : { persist: { name: persist, parse: () => undefined } }),
     },
     create: vi.fn((_scopeKey?: string): FakeInstance => {
       const instance: FakeInstance = {

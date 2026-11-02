@@ -434,7 +434,12 @@ describe('sessions', () => {
 describe('stores', () => {
   const createSuiteStore = () => defineStore({
     init: () => ({ note: '' }),
-    persist: 'trt.store',
+    persist: {
+      name: 'trt.store',
+      parse: value => typeof value === 'object' && value !== null && 'note' in value && typeof value.note === 'string'
+        ? { note: value.note }
+        : undefined,
+    },
     actions: { setNote: (d, note: string) => { d.note = note } },
   })
 

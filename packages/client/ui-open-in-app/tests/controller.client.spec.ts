@@ -88,6 +88,22 @@ describe('OpenInAppController launching', () => {
     expect(reloaded.choice.getSnapshot()).toBe('cursor')
   })
 
+  it.each(['null', '7', '["cursor"]'])('forgets a stored choice %s that is not an app id', (stored) => {
+    const values = new Map([['dsh.open-in-app.choice', stored]])
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => { values.set(key, value) },
+    })
+    const report = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const controller = new OpenInAppController(async () => jsonResponse({ apps: [] }))
+      controller.apps.set(['vscode', 'cursor'])
+      expect(controller.choice.getSnapshot()).toBe('')
+      expect(controller.currentApp()).toBe('vscode')
+      expect(report).toHaveBeenCalledOnce()
+    } finally { report.mockRestore() }
+  })
+
   it('posts the launch body and surfaces HTTP failures', async () => {
     const fetcher = vi.fn(async (input: string | URL, init?: RequestInit) => { void input; void init; return jsonResponse({ ok: true }) })
     const controller = new OpenInAppController(fetcher)

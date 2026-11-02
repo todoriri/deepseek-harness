@@ -1463,6 +1463,39 @@ describe('UiWorkspaceService', () => {
     expect(b.sessions.refreshProjections).not.toHaveBeenCalled()
   })
 
+  it.each([
+    'null',
+    '"saved"',
+    '[]',
+    '{"sessionId":7}',
+    '{"subagentAddress":"saved"}',
+    '{"subagentAddress":{"parentSessionId":"parent","childSessionId":"child"}}',
+    '{"subagentAddress":{"parentSessionId":"parent","childSessionId":7,"mode":"continuable"}}',
+    '{"subagentAddress":{"parentSessionId":"parent","childSessionId":"child","mode":"forked"}}',
+  ])('opens the most recent Workspace instead of the malformed saved selection %s', async (stored) => {
+    persistSelection({}).set('dsh.sessions.current', stored)
+    const report = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const b = bench({ workspaces: workspaceState([workspace('a')]), sessions: sessionState() })
+
+    await vi.waitFor(() => {
+      expect(b.sessions.retain).toHaveBeenCalledExactlyOnceWith(sid('created-a'), { source: 'mainView' })
+    })
+    expect(report).toHaveBeenCalledWith(
+      "snapshot store 'dsh.sessions.current' kept its initial state: the persisted value is invalid",
+    )
+    expect(warning).not.toHaveBeenCalled()
+  })
+
+  it('restores a saved subagent address whose mode is still unknown', () => {
+    const address: SubagentAddress = { parentSessionId: sid('parent'), childSessionId: sid('child'), mode: 'unknown' }
+    persistSelection({ subagentAddress: address })
+
+    const b = bench({ workspaces: workspaceState(), sessions: sessionState() })
+
+    expect(b.sessions.retain).toHaveBeenCalledExactlyOnceWith(address, { source: 'mainView' })
+  })
+
   it('persists a catalog-resolved address after string subagent navigation', () => {
     const address: SubagentAddress = {
       parentSessionId: sid('parent'),

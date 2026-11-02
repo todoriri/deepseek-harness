@@ -45,20 +45,9 @@ function recommendedFirstOption(question: PendingQuestion['questions'][number]):
   return label !== undefined && parseRecommendedLabel(label).recommended ? label : undefined
 }
 
-/** Accept persisted progress only when it still describes this question batch. */
-function isQuestionDraftProgress(value: unknown, questionCount: number): value is QuestionDraftProgress {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
-  const progress = value as Record<string, unknown>
-  if (typeof progress.index !== 'number' || !Number.isInteger(progress.index)
-    || progress.index < 0 || progress.index >= questionCount
-    || !Array.isArray(progress.drafts) || progress.drafts.length !== questionCount
-    || (progress.wait !== undefined && progress.wait !== 'editing' && progress.wait !== 'waiting')) return false
-  return progress.drafts.every((item: unknown) => {
-    if (typeof item !== 'object' || item === null || Array.isArray(item)) return false
-    const draft = item as Record<string, unknown>
-    return Array.isArray(draft.selected) && draft.selected.every((label: unknown) => typeof label === 'string')
-      && typeof draft.custom === 'string' && typeof draft.skipped === 'boolean'
-  })
+/** Accept persisted progress only when it still describes this question batch; the store admitted its field types. */
+function fitsQuestionBatch(progress: QuestionDraftProgress | undefined, questionCount: number): progress is QuestionDraftProgress {
+  return progress !== undefined && progress.index < questionCount && progress.drafts.length === questionCount
 }
 
 /** Return whether a text-field key event belongs to an active IME composition. */
@@ -181,7 +170,7 @@ function QuestionFlow({ pending, t, useStore, useQuestionCard, actions }: Questi
     })
   }, [questions, review])
   const stored = useStore(state => state.progressByRequest[pending.key])
-  const validStored = isQuestionDraftProgress(stored, questions.length) ? stored : undefined
+  const validStored = fitsQuestionBatch(stored, questions.length) ? stored : undefined
   // A review card renders the record itself, so a draft its live card left
   // behind can never surface as an answer; only the page position is restored.
   const storedProgress = review === undefined ? validStored : undefined

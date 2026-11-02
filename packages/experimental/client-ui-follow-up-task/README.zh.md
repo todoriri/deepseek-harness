@@ -63,7 +63,7 @@ kind: "package-reference"
 
 Client export 注册 `followUpTask` locale 字典、一个用于 `follow-up-task` 节点类型的 Conversation definition、通过 `conversation.chat.turnTail` slot 注册的回合尾部卡片，以及通过 keyed `tool.call.toolview` slot 注册的两个工具行。所有注册都通过 Cordis effect 或 slot injection 执行，因此销毁插件 fiber 会移除它们。卡片的 face 从 Chat target 的 `turnDataSource(turn, 'follow-up-task')` 读取每个回合的任务，并从 slot injection 接收 Session 列表、Workspace 列表、忽略 store 以及 Start、open、dismiss、restore 回调。
 
-definition 将建议的 metadata 折叠为隐藏的回合尾部节点，并在后续携带相同 `taskId` 的撤回记录到达时将 `withdrawn` 设为 true。卡片状态是上述四个输入的纯函数；Start 路径查找源 Session 的 Workspace 并调用 `ctx.uiWorkspace.startSession`。来自 `tool/result` 或 `tool/ptc-dispatch` 的 metadata 属于不受信任的持久数据：客户端校验建议的五个非空字符串（撤回为一个）并自行 brand `ToolCallId` 与 `SessionId`；它只从 Host 包导入类型。忽略 store 包装 `createSnapshotStore` 并持久化，在创建后立即校验一次恢复值，并在存储值不是干净的字符串数组时写回修复后的值。
+definition 将建议的 metadata 折叠为隐藏的回合尾部节点，并在后续携带相同 `taskId` 的撤回记录到达时将 `withdrawn` 设为 true。卡片状态是上述四个输入的纯函数；Start 路径查找源 Session 的 Workspace 并调用 `ctx.uiWorkspace.startSession`。来自 `tool/result` 或 `tool/ptc-dispatch` 的 metadata 属于不受信任的持久数据：客户端校验建议的五个非空字符串（撤回为一个）并自行 brand `ToolCallId` 与 `SessionId`；它只从 Host 包导入类型。忽略 store 向 `createSnapshotStore` 传入持久化解析器：解析器拒绝非数组值，此时没有忽略记录，并丢弃非字符串条目；解析结果不会写回，因此浏览器存储会保留原存储文本，直到下一次忽略或恢复。
 
 | 文件 | 职责 |
 |---|---|

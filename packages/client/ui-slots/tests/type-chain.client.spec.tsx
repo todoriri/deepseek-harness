@@ -73,7 +73,7 @@ declare const defineStore: DefineStore
 function createPanelStore() {
   return defineStore({
     init: () => ({ sidebar: 280, details: 0 }),
-    persist: 'test.panels',
+    persist: { name: 'test.panels', parse: () => undefined },
     actions: {
       setSidebar: (d, px: number) => { d.sidebar = px },
       setDetails: (d, px: number) => { d.details = px },

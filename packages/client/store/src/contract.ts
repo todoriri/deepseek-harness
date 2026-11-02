@@ -49,13 +49,34 @@ export type BakedActions<T, A extends ActionsDecl<T>> = {
 }
 
 /**
+ * Opt-in localStorage persistence for one store. The engine writes the whole
+ * state as JSON after every change and installs a stored value at creation
+ * only when `parse` admits it.
+ */
+export interface PersistOptions<T> {
+  /** localStorage key that holds the JSON text. */
+  readonly name: string
+  /**
+   * Admit one decoded stored value into state. The value can be any JSON
+   * value, because an earlier Client version, another tab, or manual editing
+   * may have written it; a parser whose parameter is narrower than `unknown`
+   * does not compile. The returned state is installed without being written
+   * back; storage changes at the next state change.
+   * @param value - the `JSON.parse` result of the stored text.
+   * @returns the state to install, or undefined to keep the initial state.
+   */
+  readonly parse: (value: unknown) => T | undefined
+}
+
+/**
  * Store declaration spec: initial-state factory (a lambda so every instance
- * gets a fresh state), optional persistence key (mechanical, framework-run),
+ * gets a fresh state), optional persistence (mechanical, framework-run),
  * and the actions write set.
  */
 export interface StoreSpec<T, A extends ActionsDecl<T>> {
   init: () => T
-  persist?: string
+  /** Persistence; a session-scope instance stores under `<name>.<scopeKey>`. */
+  persist?: PersistOptions<T>
   actions: A
 }
 

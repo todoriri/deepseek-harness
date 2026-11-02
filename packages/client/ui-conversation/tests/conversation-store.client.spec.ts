@@ -62,6 +62,31 @@ describe('createConversationStore', () => {
     expect(second.store.getSnapshot().draft).toBe('')
   })
 
+  it.each(['null', '42', '"text"', '[]'])('starts the Session store empty when storage holds %s', (raw) => {
+    localStorage.setItem(`${KEY}.sess-bad`, raw)
+    const report = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    expect(createConversationStore().create('sess-bad').getSnapshot()).toEqual({ draft: '', view: null, viewRequest: null })
+    expect(report).toHaveBeenCalledWith(
+      `snapshot store '${KEY}.sess-bad' kept its initial state: the persisted value is invalid`,
+    )
+  })
+
+  it.each([
+    [{ draft: 'kept', view: 7, viewRequest: 'trajectory' }, { draft: 'kept', view: null, viewRequest: null }],
+    [{ draft: 'kept', viewRequest: { view: 'trajectory' } }, { draft: 'kept', view: null, viewRequest: null }],
+    [{ draft: 'kept', viewRequest: { view: 'trajectory', focus: 1 } }, { draft: 'kept', view: null, viewRequest: null }],
+    [
+      { draft: { text: 'missing references' }, view: 'trajectory', viewRequest: { view: 'trajectory', focus: 'call-1' } },
+      { draft: '', view: 'trajectory', viewRequest: { view: 'trajectory', focus: 'call-1' } },
+    ],
+    [{ view: 'chat', viewRequest: null }, { draft: '', view: 'chat', viewRequest: null }],
+  ])('restores each usable field of the stored record %j into the Session store', (stored, restored) => {
+    localStorage.setItem(`${KEY}.sess-mixed`, JSON.stringify(stored))
+
+    expect(createConversationStore().create('sess-mixed').getSnapshot()).toEqual(restored)
+  })
+
   it('reads only a usable persisted View preference', () => {
     const sessionId = 'sess-1' as SessionId
     const store = createConversationStore().create(sessionId)

@@ -1439,6 +1439,37 @@ describe('PluginManagerController', () => {
     }
   })
 
+  it.each([
+    ['null', false],
+    ['"https://npm.corp.example/"', true],
+    ['[]', true],
+    ['{"kind":"custom"}', true],
+    ['{"kind":"custom","url":7}', true],
+    ['{"kind":"mirror","registry":null}', true],
+    ['{"kind":"offered"}', true],
+    ['{"kind":"offered","registry":7}', true],
+  ])('treats the remembered registry %s as nothing remembered', async (stored, invalid) => {
+    const storage = new Map([['dsh.plugin-manager.install-registry', stored]])
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => { storage.set(key, value) },
+      removeItem: (key: string) => { storage.delete(key) },
+    })
+    const report = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const { face, state, probe } = bench()
+      face.openInstall()
+      expect(state().install.registry).toEqual({ kind: 'offered', registry: null })
+      await vi.waitFor(() => { expect(state().install.registries).toEqual(REGISTRIES) })
+      // Only an install with nothing remembered asks which registry answers fastest.
+      await vi.waitFor(() => { expect(probe.fastest).toHaveBeenCalledOnce() })
+      expect(report).toHaveBeenCalledTimes(invalid ? 1 : 0)
+    } finally {
+      report.mockRestore()
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('starts from the registry the Host configured first while nothing is remembered', async () => {
     const corporate = { registry: CORP, fallbackRegistries: [MIRROR], resolved: OFFICIAL }
     const { plugins, face, state } = bench({

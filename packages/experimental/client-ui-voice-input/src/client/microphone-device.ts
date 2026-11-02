@@ -7,14 +7,19 @@ export interface MicrophoneDevice {
   readonly label: string
 }
 
+/** Admit a stored selection only when both fields are strings. */
+function parseMicrophoneDevice(value: unknown): MicrophoneDevice | undefined {
+  if (typeof value !== 'object' || value === null || !('id' in value) || !('label' in value)) return undefined
+  const { id, label } = value
+  return typeof id === 'string' && typeof label === 'string' ? { id, label } : undefined
+}
+
 /**
  * Restore the browser preference independently of Host recognition settings.
  * @returns validated device selection, persisted through the shared Client store.
  */
 export function createMicrophoneDeviceStore(): SnapshotStore<MicrophoneDevice> {
-  const store = createSnapshotStore<MicrophoneDevice>({ id: '', label: '' }, { persist: { name: 'dsh.voice-input.microphone' } })
-  const saved: unknown = store.getSnapshot()
-  if (!saved || typeof saved !== 'object' || !('id' in saved) || typeof saved.id !== 'string'
-    || !('label' in saved) || typeof saved.label !== 'string') store.set({ id: '', label: '' })
-  return store
+  return createSnapshotStore<MicrophoneDevice>({ id: '', label: '' }, {
+    persist: { name: 'dsh.voice-input.microphone', parse: parseMicrophoneDevice },
+  })
 }

@@ -29,6 +29,28 @@ interface MainSelection {
   readonly subagentAddress?: SubagentAddress
 }
 
+/** Admit a stored parent/child address whose ids are strings and whose mode is known. */
+function parseSubagentAddress(value: unknown): SubagentAddress | undefined {
+  if (typeof value !== 'object' || value === null
+    || !('parentSessionId' in value) || !('childSessionId' in value) || !('mode' in value)) return undefined
+  const { parentSessionId, childSessionId, mode } = value
+  if (typeof parentSessionId !== 'string' || typeof childSessionId !== 'string') return undefined
+  return mode === 'one-shot' || mode === 'continuable' || mode === 'unknown'
+    ? { parentSessionId: parentSessionId as SessionId, childSessionId: childSessionId as SessionId, mode }
+    : undefined
+}
+
+/** Admit a stored main selection; one malformed field discards the whole selection. */
+function parseMainSelection(value: unknown): MainSelection | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const sessionId = 'sessionId' in value ? value.sessionId : undefined
+  if (sessionId !== undefined && typeof sessionId !== 'string') return undefined
+  const selection: MainSelection = sessionId === undefined ? {} : { sessionId: sessionId as SessionId }
+  if (!('subagentAddress' in value)) return selection
+  const subagentAddress = parseSubagentAddress(value.subagentAddress)
+  return subagentAddress === undefined ? undefined : { ...selection, subagentAddress }
+}
+
 /** Content preparation, Agent preset, and Session identity for the Session a Workspace flow opens. */
 export interface StartSessionOptions extends DraftInitializationOptions {
   /** Agent preset the Session runs; the Host default when omitted. */
@@ -167,7 +189,7 @@ class UiWorkspaceService extends Service implements UiWorkspace {
   }>()
   private readonly lifetime = new AbortController()
   private readonly selection = createSnapshotStore<MainSelection>(
-    {}, { persist: { name: 'dsh.sessions.current' } },
+    {}, { persist: { name: 'dsh.sessions.current', parse: parseMainSelection } },
   )
   private mainReference: SessionReference | undefined
 

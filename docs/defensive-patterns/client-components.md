@@ -228,10 +228,10 @@ Every protocol grows its own fetch and invalidation logic, cache entries and ref
 
 ## Store usage is narrow and explicit
 
-A front-end store carries shared viewing or interaction state. Its spec declares the initial state, the actions that mutate it, and — when the value should survive a reload — a persistence key the framework runs mechanically, with a session-scope instance suffixing that key so per-session instances persist independently. The store's attributes and the actions that mutate them are encapsulated and injected as a narrow interface, so a component receives those and the selectors it needs and never the whole view store. Business data lives in the object layer rather than in a store, and a setting change goes through the settings interface, not through store state.
+A front-end store carries shared viewing or interaction state. Its spec declares the initial state, the actions that mutate it, and — when the value should survive a reload — a persistence key and a parser for stored values, both run mechanically by the framework, with a session-scope instance suffixing that key so per-session instances persist independently. The store's attributes and the actions that mutate them are encapsulated and injected as a narrow interface, so a component receives those and the selectors it needs and never the whole view store. Business data lives in the object layer rather than in a store, and a setting change goes through the settings interface, not through store state.
 
 - Judged by: whether the injected face is a narrow interface or the store object itself, and whether the handle is built inside `apply` or at module level.
-- Persistence: the spec's `persist` key is the whole mechanism, run by the framework; the engine instance exposes `getSnapshot`, `subscribe`, the baked actions, and `clearPersisted`, and nothing hydrates it by hand.
+- Persistence: the spec's `persist` key and `parse` function are the whole mechanism, run by the framework; `parse` receives any JSON value and returns the state to install or undefined, so a value another Client version wrote never reaches readers unchecked; the engine instance exposes `getSnapshot`, `subscribe`, the baked actions, and `clearPersisted`, and nothing hydrates it by hand.
 - Not covered: render state in a store is fine while it does not change a setting, and component-local state is not store content. [Store contracts](../subsystems/slots.md#component-inputs) own how a declared store becomes props, and [Web Client architecture](../subsystems/web-client.md) owns where business data lives.
 - Exception: a store handle exported at module level is forbidden — module-cache identity is a disguised singleton across plugin reloads; restructuring an injection face into a narrow one needs no separate approval.
 - Fix: replace the store handle in the inject return with the fields and action callbacks the component renders, and keep the handle inside `apply`.
@@ -239,8 +239,8 @@ A front-end store carries shared viewing or interaction state. Its spec declares
 One handle is built inside `apply` and passed to the registration, and the inject face carries only the fields and actions the view renders:
 
 ```tsx
-// The handle is built in apply; persistence is the spec's own key.
-const sidebarStore = createSidebarStore()   // defineStore({ init, actions, persist: 'sidebar' })
+// The handle is built in apply; persistence is the spec's own key and parser.
+const sidebarStore = createSidebarStore()   // defineStore({ init, actions, persist: { name: 'sidebar', parse } })
 
 ctx.slots.register(
   { name: 'sidebar.header', store: sidebarStore, inject: () => ({ onSelect: selectPanel }) },

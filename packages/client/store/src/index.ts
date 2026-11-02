@@ -12,14 +12,14 @@ import { subscribeWithSelector } from 'zustand/middleware'
 import { shallow } from 'zustand/shallow'
 import { freeze, produce } from 'immer'
 import type {
-  ActionsDecl, BakedActions, ObservableSnapshot, StoreHandle, StoreInstance, StoreSpec,
+  ActionsDecl, BakedActions, ObservableSnapshot, PersistOptions, StoreHandle, StoreInstance, StoreSpec,
 } from './contract.ts'
 
 // Store contract types are ui-slots authority; re-exported beside the engine
 // so store consumers get one import path.
 export type {
   ActionsDecl, BakedActions, BoundActions, DefineStore, HandleOf, MaybeSnapshotSelectorHook,
-  ObservableSnapshot, PropsStore, SnapshotSelectorHook, StoreDecl, StoreFactory,
+  ObservableSnapshot, PersistOptions, PropsStore, SnapshotSelectorHook, StoreDecl, StoreFactory,
   StoreHandle, StoreInstance, StoreSpec,
 } from './contract.ts'
 
@@ -96,17 +96,17 @@ function rafBatch(notify: () => void): () => void {
  * fresh state while existing subscribers hear it next flush — transient
  * frame-level skew, same nature as the object layer's microtask batching.
  *
- * @param init - initial state.
- * @param opts - flush mode and opt-in persistence (localStorage, keyed by name).
+ * @param init - initial state, kept when storage holds no admitted value.
+ * @param opts - flush mode and opt-in persistence (localStorage key plus the parser admitting stored values).
  * @returns the store.
  */
 export function createSnapshotStore<T>(
-  init: T, opts?: { flush?: 'raf' | 'sync'; persist?: { name: string } }): SnapshotStore<T> {
+  init: T, opts?: { flush?: 'raf' | 'sync'; persist?: PersistOptions<T> }): SnapshotStore<T> {
   // Immer enters through produce() in update() below (identical semantics to
   // the immer middleware without its setState-signature mutator generics).
   const withSelector = subscribeWithSelector(() => init)
   const api: StoreApi<T> = createStore<T>()(withSelector)
-  if (opts?.persist) attachPersistence(api, opts.persist.name)
+  if (opts?.persist) attachPersistence(api, opts.persist)
 
   let subscribe = (fn: () => void) => api.subscribe(() => {
     notifySubscribers([fn], '[client-store]')
@@ -142,16 +142,26 @@ export function createSnapshotStore<T>(
  * draft becomes {0:'h',1:'e',...}) — not fixable via merge/deserialize options
  * because the corruption happens before serialization. Storage failures
  * (quota, private mode) only disable persistence, never break the store.
+ * Rehydration installs only what `persist.parse` admits; invalid JSON, a
+ * rejected value, and a throwing parser each log the key, keep the initial
+ * state, and leave the stored text until the next change overwrites it.
  */
-function attachPersistence<T>(api: StoreApi<T>, name: string): void {
+function attachPersistence<T>(api: StoreApi<T>, persist: PersistOptions<T>): void {
   // Non-browser runs (node e2e booting the client tree) have no localStorage:
   // persistence silently disables — same contract as a storage failure, minus
   // the per-store console noise a ReferenceError would produce.
   if (typeof localStorage === 'undefined') return
+  const { name } = persist
   try {
     const raw = localStorage.getItem(name)
     if (raw !== null) {
-      api.setState(devFreeze(JSON.parse(raw) as T), true)
+      const stored: unknown = JSON.parse(raw)
+      const state = persist.parse(stored)
+      if (state === undefined) {
+        console.error(`snapshot store '${name}' kept its initial state: the persisted value is invalid`)
+      } else {
+        api.setState(devFreeze(state), true)
+      }
     }
   } catch (error) {
     console.error(`snapshot store '${name}' rehydration failed:`, error)
@@ -211,7 +221,7 @@ export interface EngineStoreHandle<T, A extends ActionsDecl<T>> extends StoreHan
  * so call sites write `(d, x: X) => { ... }` with no draft annotation. If a
  * future TS version breaks this single-literal inference, the design's
  * documented fallback is currying (`defineStore(init).actions({...})`).
- * @param decl - init lambda (fresh state per instance), optional persist key, actions table.
+ * @param decl - init lambda (fresh state per instance), optional persistence (key and stored-value parser), actions table.
  * @returns the store handle.
  */
 export function defineStore<T, A extends ActionsDecl<T>>(
@@ -219,12 +229,10 @@ export function defineStore<T, A extends ActionsDecl<T>>(
   return {
     spec: decl,
     create(scopeKey?: string): EngineStoreInstance<T, A> {
-      const persistKey = decl.persist === undefined
-        ? undefined
-        : scopeKey === undefined ? decl.persist : `${decl.persist}.${scopeKey}`
-      const store = createSnapshotStore<T>(
-        decl.init(),
-        persistKey !== undefined ? { persist: { name: persistKey } } : undefined)
+      const persist: PersistOptions<T> | undefined = decl.persist === undefined || scopeKey === undefined
+        ? decl.persist
+        : { name: `${decl.persist.name}.${scopeKey}`, parse: decl.persist.parse }
+      const store = createSnapshotStore<T>(decl.init(), persist === undefined ? undefined : { persist })
       const actions = {} as Record<string, (...params: unknown[]) => void>
       for (const key of Object.keys(decl.actions)) {
         const mutate = decl.actions[key] as (draft: T, ...params: unknown[]) => void
@@ -236,9 +244,9 @@ export function defineStore<T, A extends ActionsDecl<T>>(
         subscribe: fn => store.subscribe(fn),
         store,
         clearPersisted: () => {
-          if (persistKey === undefined || typeof localStorage === 'undefined') return
+          if (persist === undefined || typeof localStorage === 'undefined') return
           try {
-            localStorage.removeItem(persistKey)
+            localStorage.removeItem(persist.name)
           } catch {
             // Storage failures (private mode, quota teardown races) only skip
             // cleanup — the same non-fatal contract as attachPersistence.

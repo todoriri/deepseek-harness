@@ -26,15 +26,12 @@ export interface DismissalStore extends ObservableSnapshot<readonly string[]> {
 
 /**
  * Create the persisted browser-local dismissal store. A stored value that is not an array
- * restores as no dismissals, and non-string entries are dropped.
+ * restores as no dismissals, and non-string entries are dropped; browser storage keeps the
+ * stored text until the next dismiss or restore overwrites it.
  * @returns the store wrapped with the dismissal operations.
  */
 export function createDismissalStore(): DismissalStore {
-  const store = createSnapshotStore<readonly string[]>([], { persist: { name: 'dsh.follow-up-task.dismissed.v1' } })
-  // createSnapshotStore rehydrates localStorage without validation; repair the value before any reader sees it.
-  const restored: unknown = store.getSnapshot()
-  const ids = storedIds(restored)
-  if (!Array.isArray(restored) || ids.length !== restored.length) store.set(ids)
+  const store = createSnapshotStore<readonly string[]>([], { persist: { name: 'dsh.follow-up-task.dismissed.v1', parse: parseStoredIds } })
   return {
     getSnapshot: () => store.getSnapshot(),
     subscribe: listener => store.subscribe(listener),
@@ -49,12 +46,12 @@ export function createDismissalStore(): DismissalStore {
 }
 
 /**
- * Read the dismissed ids from a value rehydrated from browser storage.
- * @param value - the rehydrated value.
- * @returns its string entries, or none when it is not an array.
+ * Admit the dismissed ids stored in browser storage.
+ * @param value - the decoded stored value.
+ * @returns its string entries, or undefined to keep no dismissals when it is not an array.
  */
-function storedIds(value: unknown): readonly string[] {
-  if (!Array.isArray(value)) return []
+function parseStoredIds(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value)) return undefined
   const entries: readonly unknown[] = value
   return entries.filter(entry => typeof entry === 'string')
 }

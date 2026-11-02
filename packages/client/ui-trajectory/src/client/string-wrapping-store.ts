@@ -8,6 +8,6 @@ import {
  */
 export function createTrajectoryStringWrappingStore(): SnapshotStore<boolean> {
   return createSnapshotStore(false, {
-    persist: { name: 'dsh.trajectory.jsonStringWrapping' },
+    persist: { name: 'dsh.trajectory.jsonStringWrapping', parse: value => typeof value === 'boolean' ? value : undefined },
   })
 }
