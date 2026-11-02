@@ -29,10 +29,17 @@ interface MainSelection {
   readonly subagentAddress?: SubagentAddress
 }
 
-/** Content preparation and Agent preset for the Session a Workspace flow opens. */
+/** Content preparation, Agent preset, and Session identity for the Session a Workspace flow opens. */
 export interface StartSessionOptions extends DraftInitializationOptions {
   /** Agent preset the Session runs; the Host default when omitted. */
   readonly agentPreset?: string
+  /**
+   * Session identity to use instead of the Workspace's first reusable blank. The Host reuses that
+   * Session while it is blank and a member of the Workspace, adopts the identity when no Session is
+   * stored under it, refuses an identity stored under another directory or owned by subagent routing,
+   * and otherwise creates another Session.
+   */
+  readonly sessionId?: SessionId
 }
 
 /** Workspace archive and directory operations consumed by Client UI domains. */
@@ -47,7 +54,8 @@ export interface UiWorkspace {
    * @param workspaceId - target Workspace.
    * @param beforeOpen - optional synchronous preparation for the selected Session,
    * skipped after supersession; a throw aborts the open and releases the retained reference.
-   * @param options - choices for the Session the connection creates or reuses.
+   * @param options - choices for the Session the connection creates or reuses, including an explicit
+   * Session identity instead of the Workspace's first reusable blank.
    * @returns completion; a superseded request may create a Session but does not open it.
    * @throws on failure; a refused creation is also shown through the Workspace
    * notice unless a later navigation or disposal superseded the request.
@@ -55,7 +63,7 @@ export interface UiWorkspace {
   openWorkspace(
     workspaceId: WorkspaceId,
     beforeOpen?: (sessionId: SessionId) => void,
-    options?: Pick<StartSessionOptions, 'agentPreset'>,
+    options?: Pick<StartSessionOptions, 'agentPreset' | 'sessionId'>,
   ): Promise<void>
   /**
    * Fork a Session without changing the current selection.
@@ -83,8 +91,9 @@ export interface UiWorkspace {
    * unsent draft. A creation the Host refuses is shown through the Workspace notice and leaves the
    * selection as it was.
    * @param workspaceId - explicit target; absent inherits the current or most recent Workspace.
-   * @param options - initial content, the blank's preset, and `whenDraftExists`, which decides
-   * whether existing text or attachments are kept, replaced, or followed by the prompt.
+   * @param options - initial content, the blank's preset or an explicit Session identity, and
+   * `whenDraftExists`, which decides whether existing text or attachments are kept, replaced, or
+   * followed by the prompt.
    */
   startSession(workspaceId?: WorkspaceId, options?: StartSessionOptions): void
   /**
@@ -196,16 +205,23 @@ class UiWorkspaceService extends Service implements UiWorkspace {
   }
 
   /**
-   * @param reuse - preset for the reused or created blank.
+   * @param reuse - preset and optional Session identity for the created or reused blank.
    */
   private async connectBlank(
     workspaceId: WorkspaceId,
-    reuse: Pick<StartSessionOptions, 'agentPreset'>,
+    reuse: Pick<StartSessionOptions, 'agentPreset' | 'sessionId'>,
   ): Promise<SessionId> {
     const workspace = this.workspaces.list.getSnapshot().items
       .find(item => item.workspaceId === workspaceId)
     if (workspace === undefined) {
       throw new Error(`uiWorkspace.connectWorkspace: unknown workspace ${workspaceId}`)
+    }
+    if (reuse.sessionId !== undefined) {
+      return this.createNamed({
+        workspaceId,
+        sessionId: reuse.sessionId,
+        ...reuse.agentPreset === undefined ? {} : { agentPreset: reuse.agentPreset },
+      })
     }
     const inflight = this.connecting.get(workspaceId)
     if (inflight !== undefined && inflight.agentPreset === reuse.agentPreset) return inflight.attempt
@@ -283,7 +299,7 @@ class UiWorkspaceService extends Service implements UiWorkspace {
   openWorkspace(
     workspaceId: WorkspaceId,
     beforeOpen?: (sessionId: SessionId) => void,
-    options: Pick<StartSessionOptions, 'agentPreset'> = {},
+    options: Pick<StartSessionOptions, 'agentPreset' | 'sessionId'> = {},
   ): Promise<void> {
     return this.openWorkspaceSession(workspaceId, beforeOpen, options)
   }
@@ -291,7 +307,7 @@ class UiWorkspaceService extends Service implements UiWorkspace {
   private async openWorkspaceSession(
     workspaceId: WorkspaceId,
     beforeOpen: ((sessionId: SessionId) => void) | undefined,
-    reuse: Pick<StartSessionOptions, 'agentPreset'>,
+    reuse: Pick<StartSessionOptions, 'agentPreset' | 'sessionId'>,
   ): Promise<void> {
     const navigation = AbortSignal.any([this.ctx.layout.beginNavigation(), this.lifetime.signal])
     let sessionId: SessionId
@@ -321,7 +337,7 @@ class UiWorkspaceService extends Service implements UiWorkspace {
   }
 
   startSession(workspaceId?: WorkspaceId, options?: StartSessionOptions): void {
-    const { agentPreset, ...draft } = options ?? {}
+    const { agentPreset, sessionId, ...draft } = options ?? {}
     const draftOptions = options === undefined ? undefined : draft
     const initializeDraft = draftOptions !== undefined && (draftOptions.prompt !== undefined
       || (draftOptions.whenDraftExists ?? (draftOptions.clearPreviousDraft === true ? 'replace' : 'keep')) === 'replace')
@@ -347,7 +363,10 @@ class UiWorkspaceService extends Service implements UiWorkspace {
       const binding = this.sessions.binding(id)
       if (binding === undefined) this.draftPreparationFailed()
       this.prepareDraft(binding, draftOptions)
-    } : undefined, agentPreset === undefined ? {} : { agentPreset })
+    } : undefined, {
+      ...agentPreset === undefined ? {} : { agentPreset },
+      ...sessionId === undefined ? {} : { sessionId },
+    })
     void opening.catch(
       (reason: unknown) => { console.warn('new session failed:', reason) },
     )

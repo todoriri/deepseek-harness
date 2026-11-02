@@ -694,6 +694,54 @@ describe('UiWorkspaceService', () => {
     await vi.waitFor(() => { expect(b.sessions.retain).toHaveBeenCalledWith(sid('blank'), expect.anything()) })
   })
 
+  it('creates the requested Session identity instead of naming a listed blank', async () => {
+    const b = bench({
+      sessions: sessionState([summary('blank', { blank: true, cwd: '/w/a' })], 'pending'),
+      workspaces: workspaceState([workspace('a', [sid('blank')])]),
+    })
+    b.uiWorkspace.startSession(wid('a'), { sessionId: sid('wanted'), agentPreset: 'standard', prompt: 'Do it.' })
+    await vi.waitFor(() => {
+      expect(b.sessions.create.mock.calls).toEqual([[
+        { workspaceId: wid('a'), sessionId: sid('wanted'), agentPreset: 'standard' },
+      ]])
+    })
+    await vi.waitFor(() => { expect(b.sessions.retain).toHaveBeenCalledWith(sid('wanted'), { source: 'mainView' }) })
+  })
+
+  it('creates both Sessions when concurrent calls name different identities', async () => {
+    const b = bench({ workspaces: workspaceState([workspace('a')]) })
+    const first = Promise.withResolvers<SessionId>()
+    const second = Promise.withResolvers<SessionId>()
+    b.sessions.create.mockImplementation(async (options) => {
+      if (options?.sessionId === sid('first')) return first.promise
+      if (options?.sessionId === sid('second')) return second.promise
+      throw new Error(`unexpected Session create request ${JSON.stringify(options)}`)
+    })
+    const opening = vi.spyOn(b.uiWorkspace, 'openWorkspace')
+    b.uiWorkspace.startSession(wid('a'), { sessionId: sid('first') })
+    b.uiWorkspace.startSession(wid('a'), { sessionId: sid('second') })
+    expect(b.sessions.create.mock.calls).toEqual([
+      [{ workspaceId: wid('a'), sessionId: sid('first') }],
+      [{ workspaceId: wid('a'), sessionId: sid('second') }],
+    ])
+    first.resolve(sid('first'))
+    second.resolve(sid('second'))
+    await Promise.all(opening.mock.results.flatMap(result => result.type === 'return' ? [result.value] : []))
+    expect(b.sessions.retain).toHaveBeenCalledWith(sid('second'), { source: 'mainView' })
+  })
+
+  it('initializes the draft of an explicitly named Session', async () => {
+    const b = bench({ workspaces: workspaceState([workspace('a')]) })
+    b.uiWorkspace.startSession(wid('a'), { sessionId: sid('wanted'), prompt: 'Do it.' })
+    await vi.waitFor(() => {
+      expect(b.requestDraftInitialization).toHaveBeenCalledExactlyOnceWith(
+        b.sessions.retained[0]!.reference.binding,
+        { prompt: 'Do it.' },
+      )
+    })
+    expect(b.sessions.binding).toHaveBeenCalledWith(sid('wanted'))
+  })
+
   it('reuses any blank without a requested preset and only a matching blank with one', async () => {
     const b = bench({
       sessions: sessionState([
