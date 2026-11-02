@@ -15,7 +15,7 @@ const DESCRIPTION = 'Offer the user a follow-up task that they can start later a
 
 const TITLE_DESCRIPTION = 'Imperative label of at most about 60 characters, such as "Fix the stale config example in README".'
 
-const SUMMARY_DESCRIPTION = 'One or two plain sentences for the user: what you noticed and what the task will do.'
+const SUMMARY_DESCRIPTION = 'One or two plain-text sentences for the user, without Markdown: what you noticed and what the task will do.'
 
 const PROMPT_DESCRIPTION = 'Complete instructions for the agent in the new session, which cannot see this conversation.'
 
