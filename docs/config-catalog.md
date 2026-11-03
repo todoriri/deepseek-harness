@@ -1289,6 +1289,23 @@ export interface Config {
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-experimental-tool-agent-team -->
 
+<!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-experimental-tool-follow-up-task -->
+<a id="deepseek-aidsh-experimental-tool-follow-up-task"></a>
+
+## `@deepseek-ai/dsh-experimental-tool-follow-up-task`
+
+- `inject`: `tools` · `sessionProjections`
+- `source`: [`packages/experimental/tool-follow-up-task/src/index.ts:30`](../packages/experimental/tool-follow-up-task/src/index.ts)
+
+```ts config-catalog
+/** Deployment configuration of the follow-up task tools. */
+export interface Config {
+  /** Most `suggest_follow_up_task` calls one turn may make; later calls in that turn fail. */
+  maxSuggestionsPerTurn: number
+}
+```
+<!-- END GENERATED config-catalog:@deepseek-ai/dsh-experimental-tool-follow-up-task -->
+
 <!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-experimental-translator -->
 <a id="deepseek-aidsh-experimental-translator"></a>
 
@@ -4712,6 +4729,7 @@ These load from a `cordis.yml` entry with no `config:` block; they declare no co
 | `@deepseek-ai/dsh-experimental-auto-review` | `approval` · `llm` · `permissionPresets` · `sessions` · `tools` · `workingDirectory` | [`packages/experimental/auto-review/src/index.ts`](../packages/experimental/auto-review/src/index.ts) |
 | `@deepseek-ai/dsh-experimental-client-ui-agent-team` | — | [`packages/experimental/client-ui-agent-team/src/index.ts`](../packages/experimental/client-ui-agent-team/src/index.ts) |
 | `@deepseek-ai/dsh-experimental-client-ui-claude-code-mods` | — | [`packages/experimental/client-ui-claude-code-mods/src/index.ts`](../packages/experimental/client-ui-claude-code-mods/src/index.ts) |
+| `@deepseek-ai/dsh-experimental-client-ui-follow-up-task` | — | [`packages/experimental/client-ui-follow-up-task/src/index.ts`](../packages/experimental/client-ui-follow-up-task/src/index.ts) |
 | `@deepseek-ai/dsh-experimental-client-ui-voice-input` | — | [`packages/experimental/client-ui-voice-input/src/index.ts`](../packages/experimental/client-ui-voice-input/src/index.ts) |
 | `@deepseek-ai/dsh-experimental-computer-use-cua-driver-native` | `computerUse` · `tools` · `systemPrompt` | [`packages/experimental/computer-use-cua-driver-native/src/index.ts`](../packages/experimental/computer-use-cua-driver-native/src/index.ts) |
 | `@deepseek-ai/dsh-experimental-session-inspector` | — | [`packages/experimental/session-inspector/src/index.ts`](../packages/experimental/session-inspector/src/index.ts) |

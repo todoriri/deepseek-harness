@@ -1,0 +1,58 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/experimental/client-ui-follow-up-task/README.md
+/:
+  en: 59d1718f46c12a9d
+  zh: 2be26ecf95c1864e
+/deepseek-ai-dsh-experimental-client-ui-follow-up-task:
+  en: 2e25c5f439d27d83
+  zh: 0053f0d02bdff5ea
+/deepseek-ai-dsh-experimental-client-ui-follow-up-task/summary:
+  en: dc81cb35246a3a56
+  zh: 4d7456c5b83a8bb1
+/deepseek-ai-dsh-experimental-client-ui-follow-up-task/table-of-contents:
+  en: d152484eb41ac6b4
+  zh: 09388d293f9be9cb
+/deepseek-ai-dsh-experimental-client-ui-follow-up-task/use-this-package:
+  en: 736b9b1b6252c152
+  zh: 3546f7015ce53b85
+/deepseek-ai-dsh-experimental-client-ui-follow-up-task/use-this-package/card-states:
+  en: 457f02366f6f3234
+  zh: 66a77053bd838594
+/deepseek-ai-dsh-experimental-client-ui-follow-up-task/use-this-package/start-and-open:
+  en: 7b14823c9e60c9ad
+  zh: 6613c661132bc4cc
+/deepseek-ai-dsh-experimental-client-ui-follow-up-task/use-this-package/dismiss-and-restore:
+  en: 0ffcd01a506b2f09
+  zh: 9b81de446813ab46
+/deepseek-ai-dsh-experimental-client-ui-follow-up-task/use-this-package/transcript-rows:
+  en: f3da80759b976a0c
+  zh: 9bdd49205a30fc6a
+/deepseek-ai-dsh-experimental-client-ui-follow-up-task/understand-the-implementation:
+  en: 37229d8fc6da6df0
+  zh: 2e3d34016f186a91
+/deepseek-ai-dsh-experimental-client-ui-follow-up-task/further-exploration:
+  en: 8201d01a405a3a69
+  zh: 042f6ab955a1daf4
+/deepseek-ai-dsh-experimental-client-ui-follow-up-task/model-experience:
+  en: 215e7ba838619b7b
+  zh: a311da3843709f90
+/deepseek-ai-dsh-experimental-client-ui-follow-up-task/model-experience/cards-and-transcript-rows:
+  en: 83ff64089fdf3d21
+  zh: e66380f6493df687
+/deepseek-ai-dsh-experimental-client-ui-follow-up-task/model-experience/cards-and-transcript-rows/what-the-model-sees:
+  en: 0e850c26e1f552f5
+  zh: 8269d7b604067f4a
+/deepseek-ai-dsh-experimental-client-ui-follow-up-task/model-experience/cards-and-transcript-rows/token-effect:
+  en: 25f9dc09de317c0f
+  zh: f1e2c0b49f8cb642
+/deepseek-ai-dsh-experimental-client-ui-follow-up-task/model-experience/cards-and-transcript-rows/kv-cache-effect:
+  en: 4c843d0e3747a929
+  zh: 50ecd54b4ca0411d
+/deepseek-ai-dsh-experimental-client-ui-follow-up-task/known-limitations-and-deferred-work:
+  en: 6d4b82c7009af2fe
+  zh: b134c77b4ac5ae22
+/deepseek-ai-dsh-experimental-client-ui-follow-up-task/known-limitations-and-deferred-work/dev-note:
+  en: e67f633dc6fe7773
+  zh: 3bb0c20c93f16f98

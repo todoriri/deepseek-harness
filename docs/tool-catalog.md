@@ -42,6 +42,7 @@ This table connects model-visible tool names to the plugin package and service s
 | `@deepseek-ai/dsh-tool-subagent-control` | `interrupt_agent`, `list_agents`, `send_message` | `ctx.tools`, `ctx.subagents`, `ctx.agents and ctx.sessionProjections (list_agents only)` | `tool/call`, `tool/result`, `child session events through ctx.subagents` | - | The globally named discovery, interruption, and local-message tools over managed subagents: provider-bound `tool-subagent` instances register distinct delegation tools, while this package registers `send_message` and `interrupt_agent` once, plus `list_agents` from its separately loaded `/list-agents` plugin (whose catalog rows use the sessionProjections and live Agent registries). |
 | `@deepseek-ai/dsh-tool-jobs` | `job_kill`, `job_list`, `job_output` | `ctx.tools`, `ctx.jobs`, `ctx.systemPrompt` | `tool/call`, `tool/result`, `user/message via agent.inject() for background completion notices` | - | The kind-agnostic background-job controller: background bash commands and PTY sends are read, listed, and killed through the same three tools. Loading the plugin attaches the controller that arms producers' `ctx.jobs.start()`. |
 | `@deepseek-ai/dsh-experimental-tool-agent-team` | `interrupt_agent`, `list_agents`, `send_message`, `spawn_teammate`, `team_task_create`, `team_task_get`, `team_task_list`, `team_task_update`, `wait_agent` | `ctx.tools`, `ctx.systemPrompt`, `ctx.agentTeams`, `an exact live Team member Agent` | `tool/call`, `team/member`, `team/task`, `agent/inbox/spliced`, `user/message on inbox claim`, `tool/result` | - | All nine tools are scoped to implicit Team Leads and durable teammates. The shipped dsh-base bundle keeps the package disabled; the documented Agent Teams profile patch enables it while disabling the legacy continuable-child control names. |
+| `@deepseek-ai/dsh-experimental-tool-follow-up-task` | `dismiss_follow_up_task`, `suggest_follow_up_task` | `ctx.tools`, `ctx.sessionProjections`, `a top-level calling Agent` | `tool/call`, `tool/result (with presentation metadata on success)` | - | Explicit experimental composition only: the bundle patch mounts these tools together with the Web cards, and no shipped profile selects it. A suggestion reserves a Session id; nothing runs until the user starts the task. |
 | `@deepseek-ai/dsh-tool-todo` | `todo_write` | `ctx.tools`, `owning Agent session` | `tool/call`, `todo/write`, `tool/result` | - | todo_write is session-owned state; UIs render the latest todo/write event as a checklist. `allowParallelInProgress` is required with no default, so the catalog states its choice: `true`, whose description invites several `in_progress` items. A deployment choosing `false` receives the same tool with a description asking for exactly one active task. |
 | `@deepseek-ai/dsh-tool-working-directory` | `working_directory` | `ctx.tools`, `ctx.workingDirectory` | `tool/call`, `working-directory/change`, `user context for directory changes`, `tool/result` | - | Reads or changes the calling Session directory. Existing shells and processes retain their own directories; origin metadata and permission roots stay fixed. |
 | `@deepseek-ai/dsh-experimental-tool-worktree` | `create_worktree` | `ctx.tools`, `ctx.worktrees`, `a calling Agent` | `tool/call`, `Git branch and checkout`, `working-directory/change`, `tool/result` | - | Explicit experimental composition only. Creates a new branch and checkout from a pinned local commit under existing write permissions, then changes the Session directory. Leaving retains the branch and checkout. |
@@ -2557,6 +2558,64 @@ Wait for the next teammate status, message, or shared-task change after this cal
 Source: [`packages/experimental/tool-agent-team/src/index.ts`](../packages/experimental/tool-agent-team/src/index.ts)
 
 All nine tools are scoped to implicit Team Leads and durable teammates. The shipped dsh-base bundle keeps the package disabled; the documented Agent Teams profile patch enables it while disabling the legacy continuable-child control names.
+
+<a id="deepseek-aidsh-experimental-tool-follow-up-task"></a>
+
+## `@deepseek-ai/dsh-experimental-tool-follow-up-task`
+
+### `dismiss_follow_up_task`
+
+Withdraw a follow-up task you suggested earlier in this session when it is no longer needed, for example because it was done here or a better suggestion replaced it. Pass the `taskId` that suggest_follow_up_task returned. A session the user already started is not affected.
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "taskId": {
+      "type": "string",
+      "description": "The taskId returned by suggest_follow_up_task."
+    }
+  },
+  "required": [
+    "taskId"
+  ]
+}
+```
+
+Source: [`packages/experimental/tool-follow-up-task/src/index.ts`](../packages/experimental/tool-follow-up-task/src/index.ts)
+
+### `suggest_follow_up_task`
+
+Offer the user a follow-up task that they can start later as a new session. Use it for worthwhile work you notice outside the current request, such as a bug found in passing, missing test coverage, stale documentation, or a confirmed TODO, instead of doing that work now or only mentioning it. Do not use it for work the current request needs, for small fixes you can finish now, or for speculative ideas. Nothing runs unless the user starts the task; the user sees `title` and `summary` and reviews `prompt` before sending it. The new session cannot see this conversation, so `prompt` must stand alone: state the goal, the relevant file paths, what you observed, and how to verify the result.
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Imperative label of at most about 60 characters, such as \"Fix the stale config example in README\"."
+    },
+    "summary": {
+      "type": "string",
+      "description": "One or two plain-text sentences for the user, without Markdown: what you noticed and what the task will do."
+    },
+    "prompt": {
+      "type": "string",
+      "description": "Complete instructions for the agent in the new session, which cannot see this conversation."
+    }
+  },
+  "required": [
+    "title",
+    "summary",
+    "prompt"
+  ]
+}
+```
+
+Source: [`packages/experimental/tool-follow-up-task/src/index.ts`](../packages/experimental/tool-follow-up-task/src/index.ts)
+
+Explicit experimental composition only: the bundle patch mounts these tools together with the Web cards, and no shipped profile selects it. A suggestion reserves a Session id; nothing runs until the user starts the task.
 
 <a id="deepseek-aidsh-tool-todo"></a>
 

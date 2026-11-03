@@ -67,6 +67,7 @@ import BrowserUseRegistry from '@deepseek-ai/dsh-browser-use'
 import * as StagehandBrowserTools from '@deepseek-ai/dsh-experimental-browser-use-stagehand-native'
 import type TeamService from '@deepseek-ai/dsh-experimental-agent-team'
 import * as ToolTeam from '@deepseek-ai/dsh-experimental-tool-agent-team'
+import * as ToolFollowUpTask from '@deepseek-ai/dsh-experimental-tool-follow-up-task'
 import * as ToolTodo from '@deepseek-ai/dsh-tool-todo'
 import type PluginManager from '@deepseek-ai/dsh-plugin-manager'
 import * as PluginManagerTools from '@deepseek-ai/dsh-plugin-manager/tools'
@@ -609,6 +610,18 @@ const TOOL_PACKAGES: ToolPackage[] = [
     scope: ctx => catalogChildScopes.get(ctx) as Agent,
     note:
       'All nine tools are scoped to implicit Team Leads and durable teammates. The shipped dsh-base bundle keeps the package disabled; the documented Agent Teams profile patch enables it while disabling the legacy continuable-child control names.',
+  },
+  {
+    pkg: '@deepseek-ai/dsh-experimental-tool-follow-up-task',
+    dir: 'tool-follow-up-task',
+    source: 'packages/experimental/tool-follow-up-task/src/index.ts',
+    requires: ['ctx.tools', 'ctx.sessionProjections', 'a top-level calling Agent'],
+    writes: ['tool/call', 'tool/result (with presentation metadata on success)'],
+    async mount(ctx) {
+      await ctx.plugin(ToolFollowUpTask)
+    },
+    note:
+      'Explicit experimental composition only: the bundle patch mounts these tools together with the Web cards, and no shipped profile selects it. A suggestion reserves a Session id; nothing runs until the user starts the task.',
   },
   {
     pkg: '@deepseek-ai/dsh-tool-todo',

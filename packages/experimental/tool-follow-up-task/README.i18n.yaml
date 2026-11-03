@@ -1,0 +1,58 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/experimental/tool-follow-up-task/README.md
+/:
+  en: e9b9772bd54af299
+  zh: f7caac24a4ebdf73
+/deepseek-ai-dsh-experimental-tool-follow-up-task:
+  en: 9600b64d2c3fc8a1
+  zh: 057272baad7c4cbb
+/deepseek-ai-dsh-experimental-tool-follow-up-task/summary:
+  en: ad1e93990137d3ae
+  zh: 0e142051b2a94a45
+/deepseek-ai-dsh-experimental-tool-follow-up-task/table-of-contents:
+  en: d152484eb41ac6b4
+  zh: 2f8a621b991260a1
+/deepseek-ai-dsh-experimental-tool-follow-up-task/use-this-package:
+  en: cea40b6e4f3e5783
+  zh: 79d2afdb164ac886
+/deepseek-ai-dsh-experimental-tool-follow-up-task/understand-the-implementation:
+  en: 486a1dd67f5f2df4
+  zh: 335de847e2d335dd
+/deepseek-ai-dsh-experimental-tool-follow-up-task/further-exploration:
+  en: 7f8ed180ef2e6308
+  zh: 716bbad7a2e31918
+/deepseek-ai-dsh-experimental-tool-follow-up-task/model-experience:
+  en: 215e7ba838619b7b
+  zh: a311da3843709f90
+/deepseek-ai-dsh-experimental-tool-follow-up-task/model-experience/suggest-tool:
+  en: 31d53b85650e3511
+  zh: af03c9edcffbc1c6
+/deepseek-ai-dsh-experimental-tool-follow-up-task/model-experience/suggest-tool/what-the-model-sees:
+  en: f775ec7310d9bb24
+  zh: 680516caca516f9c
+/deepseek-ai-dsh-experimental-tool-follow-up-task/model-experience/suggest-tool/token-effect:
+  en: 95abec37cda57a5a
+  zh: c5f193585f187db3
+/deepseek-ai-dsh-experimental-tool-follow-up-task/model-experience/suggest-tool/kv-cache-effect:
+  en: 2847ff29123002bd
+  zh: 4285feb6d61a17d2
+/deepseek-ai-dsh-experimental-tool-follow-up-task/model-experience/withdraw-tool:
+  en: cab42427744892a9
+  zh: 4b07038f1951ca48
+/deepseek-ai-dsh-experimental-tool-follow-up-task/model-experience/withdraw-tool/what-the-model-sees:
+  en: 2584fb18083dbce4
+  zh: 3b56b6150edd6246
+/deepseek-ai-dsh-experimental-tool-follow-up-task/model-experience/withdraw-tool/token-effect:
+  en: d0fa1a2ad37d6b77
+  zh: cb5777641895d840
+/deepseek-ai-dsh-experimental-tool-follow-up-task/model-experience/withdraw-tool/kv-cache-effect:
+  en: 4d9246b9091eda82
+  zh: d516790832c4d094
+/deepseek-ai-dsh-experimental-tool-follow-up-task/known-limitations-and-deferred-work:
+  en: 8a09d90972ff68c4
+  zh: 779b8d52216a4c2c
+/deepseek-ai-dsh-experimental-tool-follow-up-task/known-limitations-and-deferred-work/dev-note:
+  en: e67f633dc6fe7773
+  zh: 3bb0c20c93f16f98
