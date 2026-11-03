@@ -1,0 +1,34 @@
+# Bilingual-pair consistency record for 2026-11-01-follow-up-task-suggestions.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-11-01-follow-up-task-suggestions.md
+/agent-note-follow-up-task-suggestions:
+  en: c44c69510058dbf5
+  zh: 44b2193e437d1232
+/agent-note-follow-up-task-suggestions/problem:
+  en: 56bfc7876aa700be
+  zh: 53bd4dfae2045a19
+/agent-note-follow-up-task-suggestions/decision:
+  en: b8603912f74f1a52
+  zh: 85d7a4d5f1c6d0db
+/agent-note-follow-up-task-suggestions/decision/components:
+  en: fb894fa30198ebb5
+  zh: 8a3251cf2d3a4f3a
+/agent-note-follow-up-task-suggestions/decision/data-contract:
+  en: 8e00b28b309cec20
+  zh: cec45ac4c6e5587a
+/agent-note-follow-up-task-suggestions/decision/card-states:
+  en: 2767afc2d9474db8
+  zh: 11504482a46e5e64
+/agent-note-follow-up-task-suggestions/decision/host-state-and-the-per-turn-cap:
+  en: c5c1fea700d33339
+  zh: 50c12f7eb3d74bca
+/agent-note-follow-up-task-suggestions/alternatives-considered:
+  en: 46137e10918f6576
+  zh: f210816a365fb878
+/agent-note-follow-up-task-suggestions/consequences:
+  en: de0b5516645ea24f
+  zh: 3598c591d664751c
+/agent-note-follow-up-task-suggestions/related:
+  en: 7c7ef556da1a287b
+  zh: 0f6e8fba2a551778
