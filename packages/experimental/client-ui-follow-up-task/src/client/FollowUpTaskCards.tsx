@@ -97,7 +97,12 @@ function FollowUpTaskCard({
         </span>
         <span className={css.compactTitle}>{task.title}</span>
         {state === 'dismissed' && (
-          <button type="button" className={css.action} onClick={() => { restore(task.sessionId) }}>
+          <button
+            type="button"
+            className={css.action}
+            aria-label={t('card.restoreNamed', { title: task.title })}
+            onClick={() => { restore(task.sessionId) }}
+          >
             {t('card.restore')}
           </button>
         )}
@@ -120,11 +125,21 @@ function FollowUpTaskCard({
             >
               {t('card.start')}
             </button>
-            <button type="button" className={css.action} onClick={() => { dismiss(task.sessionId) }}>
+            <button
+              type="button"
+              className={css.action}
+              aria-label={t('card.dismissNamed', { title: task.title })}
+              onClick={() => { dismiss(task.sessionId) }}
+            >
               {t('card.dismiss')}
             </button>
-            <button type="button" className={css.disclosure} aria-expanded={promptShown}
-              onClick={() => { setPromptShown(!promptShown) }}>
+            <button
+              type="button"
+              className={css.disclosure}
+              aria-expanded={promptShown}
+              aria-label={t(promptShown ? 'card.hidePromptNamed' : 'card.showPromptNamed', { title: task.title })}
+              onClick={() => { setPromptShown(!promptShown) }}
+            >
               {t(promptShown ? 'card.hidePrompt' : 'card.showPrompt')}
             </button>
           </div>
@@ -133,14 +148,24 @@ function FollowUpTaskCard({
       )}
       {state === 'drafted' && (
         <div className={css.actions}>
-          <button type="button" className={css.action} onClick={() => { start(task) }}>
+          <button
+            type="button"
+            className={css.action}
+            aria-label={t('card.openDraftNamed', { title: task.title })}
+            onClick={() => { start(task) }}
+          >
             {t('card.openDraft')}
           </button>
         </div>
       )}
       {state === 'started' && (
         <div className={css.actions}>
-          <button type="button" className={css.action} onClick={() => { open(task.sessionId) }}>
+          <button
+            type="button"
+            className={css.action}
+            aria-label={t('card.openNamed', { title: task.title })}
+            onClick={() => { open(task.sessionId) }}
+          >
             {t('card.open')}
           </button>
         </div>

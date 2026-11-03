@@ -90,8 +90,8 @@ describe('follow-up task card', () => {
       { exact: true },
     ).waitFor()
     await card.getByRole('button', { name: 'Start follow-up task: Add a test for the README example', exact: true }).waitFor()
-    await card.getByRole('button', { name: 'Dismiss', exact: true }).waitFor()
-    await card.getByRole('button', { name: 'Show prompt', exact: true }).waitFor()
+    await card.getByRole('button', { name: 'Dismiss follow-up task: Add a test for the README example', exact: true }).waitFor()
+    await card.getByRole('button', { name: 'Show prompt for follow-up task: Add a test for the README example', exact: true }).waitFor()
 
     const row = page.locator('[data-tool="suggest_follow_up_task"]')
     await expandOwningTurnProcess(page, row)

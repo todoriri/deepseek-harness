@@ -158,7 +158,7 @@ describe('FollowUpTaskCards', () => {
     expect(screen.getByText(task.summary)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: `Start follow-up task: ${task.title}` }))
     expect(start).toHaveBeenCalledWith(task)
-    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+    fireEvent.click(screen.getByRole('button', { name: `Dismiss follow-up task: ${task.title}` }))
     expect(dismiss).toHaveBeenCalledWith(task.sessionId)
   })
 
@@ -167,9 +167,9 @@ describe('FollowUpTaskCards', () => {
     const { props } = setup({ tasks: [taskNode(task)] })
     render(<FollowUpTaskCards {...props} />)
     expect(screen.queryByText(task.prompt)).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'Show prompt' }))
+    fireEvent.click(screen.getByRole('button', { name: `Show prompt for follow-up task: ${task.title}` }))
     expect(screen.getByText(task.prompt)).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Hide prompt' }))
+    fireEvent.click(screen.getByRole('button', { name: `Hide prompt for follow-up task: ${task.title}` }))
     expect(screen.queryByText(task.prompt)).toBeNull()
   })
 
@@ -181,7 +181,7 @@ describe('FollowUpTaskCards', () => {
     })
     render(<FollowUpTaskCards {...props} />)
     expect(screen.queryByText(task.summary)).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'Open draft' }))
+    fireEvent.click(screen.getByRole('button', { name: `Open draft for follow-up task: ${task.title}` }))
     expect(start).toHaveBeenCalledWith(task)
     expect(open).not.toHaveBeenCalled()
   })
@@ -193,7 +193,7 @@ describe('FollowUpTaskCards', () => {
       sessionList: sessionList([sessionSummary(task.sessionId, false)]),
     })
     render(<FollowUpTaskCards {...props} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Open session' }))
+    fireEvent.click(screen.getByRole('button', { name: `Open session for follow-up task: ${task.title}` }))
     expect(open).toHaveBeenCalledWith(task.sessionId)
     expect(start).not.toHaveBeenCalled()
   })
@@ -202,7 +202,7 @@ describe('FollowUpTaskCards', () => {
     const task = suggested()
     const { props, start, open } = setup({ tasks: [taskNode(task)], workspaceList: workspaceList([task.sessionId]) })
     render(<FollowUpTaskCards {...props} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Open session' }))
+    fireEvent.click(screen.getByRole('button', { name: `Open session for follow-up task: ${task.title}` }))
     expect(open).toHaveBeenCalledWith(task.sessionId)
     expect(start).not.toHaveBeenCalled()
   })
@@ -213,7 +213,7 @@ describe('FollowUpTaskCards', () => {
     render(<FollowUpTaskCards {...props} />)
     expect(screen.getByText('Dismissed')).toBeTruthy()
     expect(screen.getByText(task.title)).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Restore' }))
+    fireEvent.click(screen.getByRole('button', { name: `Restore follow-up task: ${task.title}` }))
     expect(restore).toHaveBeenCalledWith(task.sessionId)
   })
 
@@ -236,11 +236,11 @@ describe('FollowUpTaskCards', () => {
     expect(cards.map(card => card.getAttribute('data-state'))).toEqual(['available', 'withdrawn'])
   })
 
-  it('names Start after the task in the English locale', () => {
+  it('names Start and Dismiss after the task and keeps their visible labels in the English locale', () => {
     const task = suggested({ title: 'Fix the stale README example' })
     const { props } = setup({ tasks: [taskNode(task)] })
     render(<FollowUpTaskCards {...props} />)
-    expect(screen.getByRole('button', { name: 'Start follow-up task: Fix the stale README example' })).toBeTruthy()
-    expect(screen.getByText('Start')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Start follow-up task: Fix the stale README example' }).textContent).toBe('Start')
+    expect(screen.getByRole('button', { name: 'Dismiss follow-up task: Fix the stale README example' }).textContent).toBe('Dismiss')
   })
 })

@@ -16,8 +16,8 @@
 - paragraph: README_TYPO_FIXED
 - text: Follow-up task Add a test for the README example The README quick-start walkthrough has no automated coverage. This task adds a test that runs the documented commands and checks their output.
 - 'button "Start follow-up task: Add a test for the README example"': Start
-- button "Dismiss"
-- button "Show prompt"
+- 'button "Dismiss follow-up task: Add a test for the README example"': Dismiss
+- 'button "Show prompt for follow-up task: Add a test for the README example"': Show prompt
 - button "Copy"
 - button "Good response"
 - button "Bad response"
