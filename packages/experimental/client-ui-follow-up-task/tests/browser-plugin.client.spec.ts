@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 /**
  * The follow-up task browser half on real SlotRegistry, ConversationEventRegistry, and
- * LocaleRuntime instances: `apply` installs the dictionaries, the Conversation definition, and one
- * turn-tail card registration; the injected face reads this Turn's tasks from the Chat target,
- * starts the reserved Session in the source Session's Workspace, opens it, and dismisses or
- * restores the card in the browser-local store; teardown removes every registration (HMR safety).
+ * LocaleRuntime instances: `apply` installs the dictionaries, the Conversation definition, one
+ * turn-tail card registration, and one transcript row per tool; the injected face reads this Turn's
+ * tasks from the Chat target, starts the reserved Session in the source Session's Workspace, opens
+ * it, and dismisses or restores the card in the browser-local store; teardown removes every
+ * registration (HMR safety).
  */
 
 import { Context } from '@deepseek-ai/cordis'
@@ -22,6 +23,7 @@ import { ToolCallId } from '@deepseek-ai/dsh-llm/brand'
 import { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { FollowUpTaskSuggestedMeta } from '@deepseek-ai/dsh-experimental-tool-follow-up-task/contract'
 import { FollowUpTaskCards, type FollowUpTaskCardsInjected } from '../src/client/FollowUpTaskCards.tsx'
+import { DismissFollowUpTaskRow, SuggestFollowUpTaskRow } from '../src/client/FollowUpTaskRows.tsx'
 import { apply, inject } from '../src/client/index.ts'
 
 const SOURCE = SessionId('session-source')
@@ -114,7 +116,10 @@ async function bench(workspaces: readonly WorkspaceView[] = []) {
   await ctx.plugin(SlotRegistry).await()
   ctx.slots.register({
     name: 'root',
-    children: { 'conversation.chat.turnTail': { kind: 'list', scope: 'session' } },
+    children: {
+      'conversation.chat.turnTail': { kind: 'list', scope: 'session' },
+      'tool.call.toolview': { kind: 'keyed', scope: 'session' },
+    },
   } as never, () => null)
   return {
     ctx,
@@ -158,6 +163,24 @@ describe('follow-up task browser apply', () => {
     expect(b.ctx.locale.bind('followUpTask')('card.label')).toBe('card.label')
     expect(b.events.entries()).toEqual([])
     expect(b.slots.entries('conversation.chat.turnTail')).toEqual([])
+  })
+
+  it('registers both tools\' transcript rows under their wire names and removes them on disposal', async () => {
+    const b = await bench()
+    const fiber = b.ctx.plugin({ inject: [...inject], apply })
+    await fiber.await()
+    const rows = b.slots.entries('tool.call.toolview')
+    expect(rows).toHaveLength(2)
+    const suggest = rows.find(entry => entry.options.key === 'suggest_follow_up_task')
+    const dismiss = rows.find(entry => entry.options.key === 'dismiss_follow_up_task')
+    expect(suggest?.options.key).toBe('suggest_follow_up_task')
+    expect(suggest?.locale).toBe('followUpTask')
+    expect(suggest?.component).toBe(SuggestFollowUpTaskRow)
+    expect(dismiss?.options.key).toBe('dismiss_follow_up_task')
+    expect(dismiss?.locale).toBe('followUpTask')
+    expect(dismiss?.component).toBe(DismissFollowUpTaskRow)
+    await fiber.dispose()
+    expect(b.slots.entries('tool.call.toolview')).toEqual([])
   })
 
   it('reads the turn data source of the rendered Session for the follow-up task kind', async () => {

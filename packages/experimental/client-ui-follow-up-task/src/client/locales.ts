@@ -1,4 +1,4 @@
-/** `followUpTask` namespace dictionaries (follow-up task card copy). */
+/** `followUpTask` namespace dictionaries (follow-up task card and transcript row copy). */
 
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 
@@ -15,6 +15,13 @@ export const zh = {
   'card.hidePrompt': '隐藏提示词',
   'card.dismissed': '已忽略',
   'card.withdrawn': '已由智能体撤回',
+  'row.suggestTitle': '建议后续任务',
+  'row.dismissTitle': '撤回后续任务',
+  'row.preparing': '正在准备调用',
+  'row.running': '运行中',
+  'row.failed': '失败',
+  'row.stopped': '已停止',
+  'row.inspect': '查看调用',
 } satisfies Record<string, string>
 
 /** The follow-up task namespace key union. */
@@ -22,7 +29,7 @@ export type FollowUpTaskKey = keyof typeof zh
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
-    /** Follow-up task card copy: labels, actions, and compact states. */
+    /** Follow-up task card and transcript row copy. */
     followUpTask: FollowUpTaskKey
   }
 }
@@ -40,4 +47,11 @@ export const en = {
   'card.hidePrompt': 'Hide prompt',
   'card.dismissed': 'Dismissed',
   'card.withdrawn': 'Withdrawn by the agent',
+  'row.suggestTitle': 'Suggest follow-up task',
+  'row.dismissTitle': 'Withdraw follow-up task',
+  'row.preparing': 'Preparing tool call',
+  'row.running': 'Running',
+  'row.failed': 'Failed',
+  'row.stopped': 'Stopped',
+  'row.inspect': 'Inspect call',
 } satisfies Record<FollowUpTaskKey, string>

@@ -1,4 +1,7 @@
-/** Web cards for logged follow-up task suggestions: start, open, or dismiss each one. */
+/**
+ * Web cards for logged follow-up task suggestions: start, open, or dismiss each one. The plugin
+ * also registers both tools' transcript rows.
+ */
 
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
@@ -13,11 +16,14 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-chat/client'
 // Type-only: pulls the SlotRegistry service merge (ctx.slots).
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+// Type-only: pulls the keyed tool.call.toolview slot declaration.
+import type {} from '@deepseek-ai/dsh-client-ui-tool/client'
 // Type-only: pulls the ui-workspace Context merge (ctx.uiWorkspace).
 import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
 import { createDismissalStore } from './dismissals.ts'
 import { followUpTaskDefinition } from './definition.ts'
 import { FollowUpTaskCards, type FollowUpTaskCardsInjected } from './FollowUpTaskCards.tsx'
+import { DismissFollowUpTaskRow, SuggestFollowUpTaskRow } from './FollowUpTaskRows.tsx'
 import { en, zh } from './locales.ts'
 
 /** Client services the cards consume. */
@@ -30,7 +36,8 @@ const NS = 'followUpTask'
 const ID = '@deepseek-ai/dsh-experimental-client-ui-follow-up-task'
 
 /**
- * Register the follow-up task dictionaries, the Conversation definition, and the turn-tail cards.
+ * Register the follow-up task dictionaries, the Conversation definition, the turn-tail cards, and
+ * both tools' transcript rows.
  *
  * Every Session's cards share one browser-local dismissal store for the plugin's lifetime. A
  * Session's face reads each turn's tasks from that Session's Chat target. Start opens the task in
@@ -77,4 +84,8 @@ export function apply(ctx: ClientContext): void {
       }
     },
   }, FollowUpTaskCards))
+  ctx.slots.inject('tool.call.toolview', function* () {
+    yield ctx.slots.register({ name: 'tool.call.toolview', key: 'suggest_follow_up_task', locale: NS }, SuggestFollowUpTaskRow)
+    yield ctx.slots.register({ name: 'tool.call.toolview', key: 'dismiss_follow_up_task', locale: NS }, DismissFollowUpTaskRow)
+  })
 }

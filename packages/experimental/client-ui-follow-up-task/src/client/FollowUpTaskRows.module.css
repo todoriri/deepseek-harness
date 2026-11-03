@@ -1,0 +1,73 @@
+/* Follow-up task transcript rows: one summary line and its expandable result text. */
+
+.root {
+  display: flex;
+  flex-direction: column;
+}
+
+.title {
+  font-weight: 400;
+}
+
+.separator {
+  flex: none;
+  width: 2px;
+  height: 2px;
+  border-radius: 1px;
+  margin: 0 8px;
+  background: var(--dsw-alias-label-caption);
+}
+
+.summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--dsh-content-font-size-secondary, 13px);
+  line-height: calc(24px + var(--dsh-content-font-delta, 0px));
+}
+
+.root[data-state='error'] .summary {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.root[data-state='stopped'] .summary {
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+}
+
+.output {
+  margin: 8px 0;
+  padding: 12px;
+  border-radius: var(--dsw-radius-lg);
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.inspect {
+  align-self: flex-start;
+  border: none;
+  padding: 4px 0;
+  background: transparent;
+  color: var(--dsw-alias-link);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
