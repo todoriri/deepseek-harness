@@ -1,0 +1,8 @@
+version: 1
+scenario: follow-up-task-card
+profile: web
+composition: web-follow-up-task
+recording: authored
+header:
+  class: web-follow-up-task
+  pin: true

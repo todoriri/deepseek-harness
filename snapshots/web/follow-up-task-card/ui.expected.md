@@ -1,0 +1,33 @@
+- banner:
+  - navigation "Session hierarchy": Fix the typo in README.md
+  - text: Standard mode
+  - button "More actions"
+  - button "Open right sidebar"
+  - tablist:
+    - tab "Chat" [selected]
+    - tab "Trajectory"
+  - button "More conversation views"
+- text: Fix the typo in README.md and reply exactly README_TYPO_FIXED when done. {{clock}}
+- button "Copy"
+- status: Completed
+- button "Completed in {{duration}}" [expanded]
+- button "Called tools" [expanded]
+- button "Suggest follow-up task Add a test for the README example"
+- paragraph: README_TYPO_FIXED
+- text: Follow-up task Add a test for the README example The README quick-start walkthrough has no automated coverage. This task adds a test that runs the documented commands and checks their output.
+- 'button "Start follow-up task: Add a test for the README example"': Start
+- button "Dismiss"
+- button "Show prompt"
+- button "Copy"
+- button "Good response"
+- button "Bad response"
+- button "Branch into a new conversation"
+- text: {{clock}}
+- textbox "Message or run a task, / commands, @ files or sessions"
+- button "Add files or run commands"
+- 'button "Access mode, current: Workspace Write"': Workspace Write
+- button "Select model, current DeepSeek-V4-Flash": DeepSeek-V4-Flash
+- button "Send message" [disabled]
+- button "1 turns 2 steps · {{throughput}} tok/s": 1 turns 2 steps{{throughput}} tok/s
+- button "28 tok · Cache hit 0%": 28 tokCache hit 0%
+- button "0% of context used": 0%
