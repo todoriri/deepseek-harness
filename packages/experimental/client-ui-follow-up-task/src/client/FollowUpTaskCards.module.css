@@ -29,20 +29,15 @@
   line-height: 16px;
 }
 
+/* The card is the only place the title and summary appear in full, so both wrap instead of truncating. */
 .title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   font-size: 13px;
   font-weight: 500;
   line-height: 20px;
+  overflow-wrap: anywhere;
 }
 
 .summary {
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
   color: var(--dsw-alias-label-secondary);
   font-size: 12px;
   line-height: 18px;
