@@ -35,7 +35,15 @@ Web 组合以 patch 层的形式选择此 bundle。它的 [`cordis.patch.yml`](c
       name: '@deepseek-ai/dsh-experimental-client-ui-follow-up-task'
 ```
 
-在源码检出中，运行以下命令以带此 bundle 的 Web profile 启动：`pnpm dsh --patch packages/experimental/tool-follow-up-task/cordis.patch.yml --profile web`。`--patch` 是启动器选项，必须位于 `--profile` 之前。
+dsh 安装不随附本包，因此在 profile 安装本包之前，无论通过 `dsh.profile.bundles` 还是其 `cordis.patch.yml` 中的这些行，profile 都无法按名称解析该 bundle。在已构建的检出根目录中，将本包安装到 Web profile：
+
+```sh
+dsh plugin --profile web add ./packages/experimental/tool-follow-up-task
+```
+
+CLI 将该目录记录为 `link:` 依赖，并把该 bundle 追加到 `dsh.profile.bundles` 中 base 与 Web 层之后。该链接使用检出自身的构建产物与依赖，因此代码变更后需重新构建检出并重启 dsh。Web **插件** 页面的 **添加插件** 接受以绝对路径表示的同一目录，**立即启用** 会开启该 bundle。使用 `dsh plugin --profile web remove @deepseek-ai/dsh-experimental-tool-follow-up-task` 移除它。
+
+如需在不修改 profile 的情况下从源码检出试用此 bundle，运行 `pnpm dsh --patch packages/experimental/tool-follow-up-task/cordis.patch.yml --profile web`。`--patch` 是启动器选项，必须位于 `--profile` 之前。
 
 | 字段 | 类型 | 默认值 | 含义 |
 |---|---|---|---|
@@ -125,7 +133,7 @@ projection 保存 `openTurnCalls`（当前打开回合内 suggest 调用的 call
 - **PTC 撤回竞态**——在同一个 `run_code` 程序中，紧跟在 suggest 之后的 dismiss 可能因未知而被拒绝，因为 PTC 只有在子调用完成后才追加 `tool/ptc-dispatch`；在后续步骤中撤回会成功。
 - **相同 Workspace 与检出目录**——工作树隔离已延期：任务在源 Session 的 Workspace 中启动并复用其检出目录，用户无法选择目录。
 - **仅限顶层 Agent**——委派的 subagent 不能建议或撤回任务；它必须向父 Agent 报告该后续工作。
-- **没有 Plugin Manager 开关**——该 bundle 不是官方可选 bundle，Plugin Manager 不为它提供开关；profile 只能通过显式 patch 层加载它。
+- **不随 dsh 提供**——该 bundle 不是官方可选 bundle，因此安装不携带它，在 profile 安装本包之前 Plugin Manager 也不为它提供开关。只有 `OPTIONAL_BUNDLES` 列出的实验包才能成为安装的依赖（[理由](../../../.agents/notes/implemented/process/2026-09-15-shipped-optional-bundles.zh.md)），而收录需要经过批准的官方图标。
 
 <a id="dev-note"></a>
 ### 开发备注

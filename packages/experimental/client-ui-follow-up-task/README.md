@@ -25,7 +25,7 @@ Show each logged follow-up task suggestion as a card under its turn: the title, 
 <a id="use-this-package"></a>
 ## Use this package
 
-Enable this package through the follow-up task bundle: the Host [tool package](../tool-follow-up-task/README.md) and this Web plugin are mounted together by the bundle's patch, so enabling the bundle supplies both the tools and the cards. The Web Client loader mounts the `/client` export; the root Host export is inert, and the package has no user configuration fields.
+Enable this package through the follow-up task bundle: the Host [tool package](../tool-follow-up-task/README.md) and this Web plugin are mounted together by the bundle's patch, so enabling the bundle supplies both the tools and the cards. The dsh installation ships neither package; the tool package's README says how to [install the bundle into a profile](../tool-follow-up-task/README.md#use-this-package). The Web Client loader mounts the `/client` export; the root Host export is inert, and the package has no user configuration fields.
 
 ### Card states
 

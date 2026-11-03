@@ -25,7 +25,7 @@ kind: "package-reference"
 <a id="use-this-package"></a>
 ## 使用本包
 
-通过后续任务 bundle 启用本包：bundle 的 patch 将 Host [工具包](../tool-follow-up-task/README.zh.md) 与本 Web 插件一起挂载，因此启用 bundle 会同时提供工具和卡片。Web Client loader 挂载 `/client` export；root Host export 不执行行为，本包也没有用户配置字段。
+通过后续任务 bundle 启用本包：bundle 的 patch 将 Host [工具包](../tool-follow-up-task/README.zh.md) 与本 Web 插件一起挂载，因此启用 bundle 会同时提供工具和卡片。dsh 安装不随附这两个包；工具包的 README 说明如何[将该 bundle 安装到 profile](../tool-follow-up-task/README.zh.md#use-this-package)。Web Client loader 挂载 `/client` export；root Host export 不执行行为，本包也没有用户配置字段。
 
 ### 卡片状态
 

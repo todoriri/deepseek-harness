@@ -35,7 +35,15 @@ A Web composition selects this bundle as a patch layer. Its [`cordis.patch.yml`]
       name: '@deepseek-ai/dsh-experimental-client-ui-follow-up-task'
 ```
 
-From a source checkout, launch the Web profile with this bundle by running `pnpm dsh --patch packages/experimental/tool-follow-up-task/cordis.patch.yml --profile web`. `--patch` is a launcher option and must precede `--profile`.
+The dsh installation does not ship this package, so a profile cannot resolve the bundle by name, through `dsh.profile.bundles` or through these rows in its `cordis.patch.yml`, until the profile installs the package. From the root of a built checkout, install it into the Web profile:
+
+```sh
+dsh plugin --profile web add ./packages/experimental/tool-follow-up-task
+```
+
+The CLI records the directory as a `link:` dependency and appends the bundle to `dsh.profile.bundles` after the base and Web layers. The link uses the checkout's build and dependencies, so rebuild the checkout and restart dsh after code changes. The Web **Plugins** page's **Add plugin** accepts the same directory as an absolute path, and **Enable now** switches the bundle on. Remove it with `dsh plugin --profile web remove @deepseek-ai/dsh-experimental-tool-follow-up-task`.
+
+To try the bundle from a source checkout without changing a profile, run `pnpm dsh --patch packages/experimental/tool-follow-up-task/cordis.patch.yml --profile web`. `--patch` is a launcher option and must precede `--profile`.
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
@@ -125,7 +133,7 @@ Unchanged tool schemas retain their existing prefix. Calls append after prior hi
 - **PTC dismissal race** — inside one `run_code` program, a dismiss that immediately follows its suggest can be refused as unknown because PTC appends `tool/ptc-dispatch` only after the sub-call resolves; a dismiss in a later step succeeds.
 - **Same Workspace and checkout** — worktree isolation is deferred: the task starts in the source Session's Workspace and reuses its checkout, and the user cannot choose a directory.
 - **Top-level agents only** — a delegated subagent cannot suggest or withdraw a task; it must report the follow-up to its parent Agent.
-- **No Plugin Manager switch** — the bundle is not an official optional bundle, so the Plugin Manager offers no switch for it; a profile loads it only through an explicit patch layer.
+- **Not shipped with dsh** — the bundle is not an official optional bundle, so the installation does not carry it and the Plugin Manager offers no switch for it until a profile installs the package. The installation may depend on an experimental package only when `OPTIONAL_BUNDLES` names it ([rationale](../../../.agents/notes/implemented/process/2026-09-15-shipped-optional-bundles.md)), and admission requires an approved official icon.
 
 <a id="dev-note"></a>
 ### Dev Note
