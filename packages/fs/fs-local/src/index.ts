@@ -268,9 +268,11 @@ export class LocalFileSystem extends FileSystem {
 
   /**
    * The before-content basis, read through the verified descriptor when pinning is
-   * on. A file deleted after the caller's preflight costs only the optional basis
-   * (the verified helper's `FS_NOT_FOUND` becomes `null`); an identity refusal is
-   * the swap this closes and fails the operation.
+   * on. As on the unpinned path, a file deleted or made unreadable after the
+   * caller's preflight costs only the optional basis (the verified helper's
+   * `FS_NOT_FOUND` or a kernel errno becomes `null`); the mutation still goes
+   * through the pinned directory. An identity refusal is the swap this closes and
+   * fails the operation; cancellation propagates.
    */
   private async readDiffBasis(target: FsTarget, pinned: PinnedDirectory | undefined, signal?: AbortSignal): Promise<string | null> {
     if (!pinned) return readTextForDiff(target.targetKey, this.config.diffBasisMaxBytes, signal)
@@ -278,7 +280,7 @@ export class LocalFileSystem extends FileSystem {
     try {
       handle = await openVerifiedChildFile(pinned, basename(target.targetKey), target.displayPath, 'read', signal)
     } catch (error: unknown) {
-      if (error instanceof FsError && error.code === 'FS_NOT_FOUND') return null
+      if (error instanceof FsError ? error.code === 'FS_NOT_FOUND' : error instanceof Error && 'code' in error) return null
       throw error
     }
     try {

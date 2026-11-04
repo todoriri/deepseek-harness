@@ -99,6 +99,15 @@ describe.runIf(FD_PINNING_AVAILABLE)('verified file opens under injected faults'
     expect(await readFile(path, 'utf8')).toBe('after\n')
   })
 
+  it('drops only the diff basis when the overwritten file is unreadable', async () => {
+    const path = join(dir, 'unreadable.txt')
+    await writeFile(path, 'before\n')
+    faults.open = at => throughDescriptor(at, 'unreadable.txt') ? errno('EACCES') : undefined
+    const outcome = await fs.writeText(await fs.resolve(path), 'after\n')
+    expect(outcome).toMatchObject({ operation: 'update', before: null, after: 'after\n' })
+    expect(await readFile(path, 'utf8')).toBe('after\n')
+  })
+
   it('surfaces an edit open refusal other than not-found or a symlink unchanged', async () => {
     const path = join(dir, 'edit.txt')
     await writeFile(path, 'original\n')
@@ -170,12 +179,12 @@ describe.runIf(FD_PINNING_AVAILABLE)('pinned patch, delete and move opens under 
     expect(await readFile(path, 'utf8')).toBe('old\n')
   })
 
-  it('surfaces a delete before-content open refusal unchanged and keeps the file', async () => {
+  it('drops only the delete basis when the before-content open is refused, and deletes the file', async () => {
     const path = join(dir, 'del.txt')
     await writeFile(path, 'old\n')
     faults.open = at => throughDescriptor(at, 'del.txt') ? errno('EACCES') : undefined
-    await expect(fs.deleteFile(await fs.resolve(path))).rejects.toMatchObject({ code: 'EACCES' })
-    expect(await readFile(path, 'utf8')).toBe('old\n')
+    expect(await fs.deleteFile(await fs.resolve(path))).toEqual({ before: null })
+    expect(existsSync(path)).toBe(false)
   })
 
   it('refuses a delete whose opened file is not the pinned directory’s child', async () => {
@@ -217,16 +226,16 @@ describe.runIf(FD_PINNING_AVAILABLE)('pinned patch, delete and move opens under 
     expect(existsSync(destination)).toBe(false)
   })
 
-  it('surfaces a move destination before-content open refusal unchanged', async () => {
+  it('drops only the destination basis when its before-content open is refused, and completes the move', async () => {
     const source = join(dir, 'src.txt')
     await writeFile(source, 'old\n')
     const destination = join(dir, 'dst.txt')
     await writeFile(destination, 'previous\n')
     faults.open = at => throughDescriptor(at, 'dst.txt') ? errno('EACCES') : undefined
-    await expect(fs.moveFile(await fs.resolve(source), await fs.resolve(destination), {}))
-      .rejects.toMatchObject({ code: 'EACCES' })
-    expect(await readFile(source, 'utf8')).toBe('old\n')
-    expect(await readFile(destination, 'utf8')).toBe('previous\n')
+    const outcome = await fs.moveFile(await fs.resolve(source), await fs.resolve(destination), {})
+    expect(outcome).toMatchObject({ sourceDeleted: true, destination: { operation: 'update', before: null, after: 'old\n' } })
+    expect(existsSync(source)).toBe(false)
+    expect(await readFile(destination, 'utf8')).toBe('old\n')
   })
 
   it('refuses a move whose destination directory descriptor is not the expected directory', async () => {
