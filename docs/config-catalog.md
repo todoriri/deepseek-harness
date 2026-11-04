@@ -1467,7 +1467,7 @@ export interface Config {
 ## `@deepseek-ai/dsh-experimental-tool-follow-up-task`
 
 - `inject`: `tools` · `sessionProjections`
-- `source`: [`packages/experimental/tool-follow-up-task/src/index.ts:30`](../packages/experimental/tool-follow-up-task/src/index.ts)
+- `source`: [`packages/experimental/tool-follow-up-task/src/index.ts:28`](../packages/experimental/tool-follow-up-task/src/index.ts)
 
 ```ts config-catalog
 /** Deployment configuration of the follow-up task tools. */

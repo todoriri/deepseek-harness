@@ -20,7 +20,7 @@ The bound reaches all three of the dispatcher's undici construction sites: the p
 
 **A second dispatcher installer in `dsh-llm-pi-ai` (the upstream `egress.ts` shape).** Rejected: `verify-no-bare-dispatcher` forbids `new Agent(...)` and a `dispatcher` option outside this package, and a second `setGlobalDispatcher` owner recreates the single-global-slot contention this package exists to hold. It would also leave MCP-over-HTTP, web search, and web fetch on undici's default.
 
-**A per-request loopback-scoped `fetch` from the adapter.** Deferred: pi-ai `0.85.1` does accept a per-request `fetch` (`openai-completions` threads `options.fetch` into the `openai` client; `pi-messages` calls `options?.fetch ?? globalThis.fetch`), and [`web-fetch-http`](../../../../packages/web/web-fetch-http/src/network.ts) shows the sanctioned `proxy-exempt:` per-request dispatcher. But it is LLM-scoped and fixes only one consumer, needs an adapter fetch seam, and does not bound the other egress paths a process-wide owner covers.
+**A per-request loopback-scoped `fetch` from the adapter.** Deferred: pi-ai `0.85.1` does accept a per-request `fetch` (`openai-completions` threads `options.fetch` into the `openai` client; `pi-messages` calls `options?.fetch ?? globalThis.fetch`). But it is LLM-scoped and fixes only one consumer, needs an adapter fetch seam, and does not bound the other egress paths a process-wide owner covers.
 
 ## Consequences
 

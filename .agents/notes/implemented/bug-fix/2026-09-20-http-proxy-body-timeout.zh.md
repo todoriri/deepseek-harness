@@ -20,7 +20,7 @@ Node 内置的 `fetch` 运行在 undici 之上，其全局 dispatcher 将 `bodyT
 
 **在 `dsh-llm-pi-ai` 中增加第二个 dispatcher 安装器（上游 `egress.ts` 的做法）。** 已拒绝：`verify-no-bare-dispatcher` 禁止在本包之外使用 `new Agent(...)` 与 `dispatcher` 选项，而第二个 `setGlobalDispatcher` 持有者会重新引入本包所要消除的单一全局槽位争用。它还会让 MCP-over-HTTP、web search 与 web fetch 停留在 undici 默认值上。
 
-**由适配器提供按请求、限定 loopback 的 `fetch`。** 已推迟：pi-ai `0.85.1` 确实接受按请求的 `fetch`（`openai-completions` 将 `options.fetch` 传入 `openai` client；`pi-messages` 调用 `options?.fetch ?? globalThis.fetch`），并且 [`web-fetch-http`](../../../../packages/web/web-fetch-http/src/network.ts) 展示了经认可的 `proxy-exempt:` 按请求 dispatcher。但它只作用于 LLM，只修复一个消费者，需要适配器 fetch 接口，也无法限定进程级持有者所覆盖的其他出网路径。
+**由适配器提供按请求、限定 loopback 的 `fetch`。** 已推迟：pi-ai `0.85.1` 确实接受按请求的 `fetch`（`openai-completions` 将 `options.fetch` 传入 `openai` client；`pi-messages` 调用 `options?.fetch ?? globalThis.fetch`）。但它只作用于 LLM，只修复一个消费者，需要适配器 fetch 接口，也无法限定进程级持有者所覆盖的其他出网路径。
 
 ## 后果
 
