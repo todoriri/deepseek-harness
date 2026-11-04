@@ -79,7 +79,7 @@ The fence is a policy check in trusted code over a model-controlled path — not
 
 ### How a mutation is fenced
 
-Each mutation resolves the per-call policy (`danger-full-access` returns the caller's target untouched; `read-only` throws `FS_SANDBOX_DENIED`), then for `workspace-write` re-canonicalizes the target immediately and requires containment under one of the writable roots derived from the single `writableRoots` function — the same set the Seatbelt profile grants, so the fs fence and the bash runner cannot drift. The fresh target is the one mutated, so a symlink ancestor swapped since the tool resolved it is caught. A write or edit then pins the destination directory by DESCRIPTOR (`fs-local`'s `verifyOpens`, which this backend enables): the staging directory, its file and the publication rename all go through `/proc/self/fd/<dirfd>/…`, so a component swapped after this containment check cannot redirect it either. `patchText`, `deleteFile` and `moveFile` mutate the fresh target by path.
+Each mutation resolves the per-call policy (`danger-full-access` returns the caller's target untouched; `read-only` throws `FS_SANDBOX_DENIED`), then for `workspace-write` re-canonicalizes the target immediately and requires containment under one of the writable roots derived from the single `writableRoots` function — the same set the Seatbelt profile grants, so the fs fence and the bash runner cannot drift. The fresh target is the one mutated, so a symlink ancestor swapped since the tool resolved it is caught. Every mutation then pins its target directory by DESCRIPTOR (`fs-local`'s `verifyOpens`, which this backend enables): `writeText`, `editText` and `patchText` read their before-content and stage/publish through the descriptor; `deleteFile` reads its before-content and unlinks through it; `moveFile` pins both the source and destination directories. The staging directory, its file and the publication rename all go through `/proc/self/fd/<dirfd>/…`, so a component swapped after this containment check cannot redirect a mutation either.
 
 ### How a read is fenced
 
@@ -87,7 +87,7 @@ Only when `fenceReads` is enabled, and only under `workspace-write`: the guard r
 
 ### Threat model
 
-On Linux the resolve-to-syscall window is closed by DESCRIPTOR PINNING: a read opens first and verifies the descriptor it opened against the resolved target, and a write or edit pins the destination directory, so a symlink a confined worker swaps into the path no longer redirects those operations; a patch, delete or move keeps the window. Where `/proc/self/fd` is unavailable (Node exposes no `openat`), those primitives are inert and the window remains — the backend reports that platform fact rather than hiding it. A denial is a structured `FsError`, not stderr inference — an in-process fence knows exactly what it refused.
+On Linux the resolve-to-syscall window is closed by DESCRIPTOR PINNING: a read opens first and verifies the descriptor it opened against the resolved target, and every mutation pins its target directory, so a symlink a confined worker swaps into the path no longer redirects those operations. Where `/proc/self/fd` is unavailable (Node exposes no `openat`), those primitives are inert and the window remains — the backend reports that platform fact rather than hiding it. A denial is a structured `FsError`, not stderr inference — an in-process fence knows exactly what it refused.
 
 </details>
 
@@ -131,7 +131,7 @@ A standing-policy change appends an owner-rendered superseding runtime-context s
 
 These limits define when the sandbox backend is a poor fit or needs special operational care. They are current package constraints, not a general sandbox comparison or a task backlog.
 
-- **A policy fence, not a kernel boundary** — the check is trusted code over a model-controlled path. On Linux descriptor pinning closes the resolve-to-syscall window for reads, writes and edits, while patches, deletes and moves keep it; on a host without `/proc/self/fd` that window remains, and adversarial host processes are out of scope either way. Kernel-grade isolation of untrusted code stays `ctx.shell`'s.
+- **A policy fence, not a kernel boundary** — the check is trusted code over a model-controlled path. On Linux descriptor pinning closes the resolve-to-syscall window for reads and every mutation; on a host without `/proc/self/fd` that window remains, and adversarial host processes are out of scope either way. Kernel-grade isolation of untrusted code stays `ctx.shell`'s.
 - **Fence-vs-runner parity is derived from one owner** — the writable set comes from `writableRoots`, shared with the Seatbelt profile; a runner profile that defines its writable set elsewhere would drift.
 - **Requires `ctx.sandboxPolicy`** — tools use it to resolve each session policy and the backend uses it for agentless-call fallbacks; the backend does not confine without it composed.
 
