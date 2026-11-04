@@ -8,12 +8,23 @@ import * as PiAi from '../src/index.ts'
 import { assemble } from './assemble.ts'
 import { closeMockServers, mockServer, textEvents } from './mock-server.ts'
 
+declare module '@deepseek-ai/dsh-llm/types' {
+  interface LlmRequestPurposeMap {
+    'test-request-headers': true
+  }
+}
+
 afterEach(async () => {
   await closeMockServers()
   vi.unstubAllEnvs()
 })
 
-async function harness(baseURL: string, otherURL?: string, headers?: Record<string, string>): Promise<Context> {
+async function harness(
+  baseURL: string,
+  otherURL?: string,
+  headers?: Record<string, string>,
+  sessionIdHeader?: string,
+): Promise<Context> {
   vi.stubEnv('PI_HEADERS_KEY', 'fixture-key')
   const ctx = new Context()
   onTestFinished(() => ctx.fiber.dispose())
@@ -21,6 +32,7 @@ async function harness(baseURL: string, otherURL?: string, headers?: Record<stri
   await ctx.plugin(PiAi, { providers: { deepseek: {
     apiKeyEnv: 'PI_HEADERS_KEY', baseURL,
     headers: { 'X-Company': 'static', 'X-Request-Session': 'static-session', ...headers },
+    ...sessionIdHeader === undefined ? {} : { sessionIdHeader },
   }, ...otherURL === undefined ? {} : { gateway: {
     apiKeyEnv: 'PI_HEADERS_KEY', api: 'openai-completions', baseURL: otherURL, models: [{ id: 'm' }],
   } } } })
@@ -78,6 +90,23 @@ it('composes request-local headers, enforces attribution, and removes disposed l
   await assemble(ctx, { model: 'deepseek-flash', messages: [], sessionId: SessionId('two') })
   expect(server.headers[2]).toMatchObject({ 'x-request-session': 'static-session', 'x-company': 'static' })
   expect(server.headers[2]).not.toHaveProperty('x-second-listener')
+})
+
+it('shows contributors the opted-in session-id header and the request purpose', async () => {
+  const server = await mockServer([{ events: textEvents }])
+  const ctx = await harness(server.url, undefined, undefined, 'x-session-id')
+  const seen: { request: PiAi.PiAiRequestHeaderContext; sessionHeader: string | null }[] = []
+  ctx.on('llm-pi-ai/request-headers', (request, headers, next) => {
+    seen.push({ request, sessionHeader: headers.get('x-session-id') })
+    headers.set('user-agent', 'contributor')
+    return next()
+  })
+  await assemble(ctx, { model: 'deepseek-flash', messages: [], sessionId: SessionId('one'), purpose: 'test-request-headers' })
+  expect(seen).toEqual([{
+    request: { provider: 'deepseek', model: 'deepseek-flash', baseURL: server.url, sessionId: 'one', purpose: 'test-request-headers' },
+    sessionHeader: 'one',
+  }])
+  expect(server.headers[0]).toMatchObject({ 'x-session-id': 'one', 'user-agent': userAgent() })
 })
 
 it('uses the prepared endpoint and isolates overlapping requests', async () => {
