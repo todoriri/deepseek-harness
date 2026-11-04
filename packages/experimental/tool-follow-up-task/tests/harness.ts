@@ -8,7 +8,7 @@ import { Context } from '@deepseek-ai/cordis'
 import type { Fiber } from '@deepseek-ai/cordis'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import type { Agent, AgentOptions } from '@deepseek-ai/dsh-agent'
-import { unsupportedInbox } from '@deepseek-ai/dsh-agent-loop-testkit'
+import { unsupportedInbox, unsupportedModel } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import type { Scope } from '@deepseek-ai/dsh-scope'
@@ -18,6 +18,7 @@ import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import type { ToolExecutionResult } from '@deepseek-ai/dsh-tools'
+import { executeToolFixture } from '@deepseek-ai/dsh-tool-testkit'
 import type { Config } from '../src/index.ts'
 import * as ToolFollowUpTask from '../src/index.ts'
 import { SUGGEST_TOOL_NAME } from '../src/projection.ts'
@@ -55,6 +56,7 @@ async function stubAgent(ctx: Context, session: Session, options: AgentOptions):
     id: session.id,
     options,
     session,
+    model: unsupportedModel(),
     inbox: unsupportedInbox(),
     status: 'idle',
     get ctx() { return scope.ctx },
@@ -106,7 +108,7 @@ export function executeCall(
   args: Record<string, unknown>,
   agent: Agent | null = bench.agent,
 ): Promise<ToolExecutionResult> {
-  return bench.ctx.tools.execute({
+  return executeToolFixture(bench.ctx, {
     callId,
     name,
     arguments: args,

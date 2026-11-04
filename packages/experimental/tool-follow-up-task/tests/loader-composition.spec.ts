@@ -15,7 +15,7 @@ import type { PatchOptions } from '@deepseek-ai/cordis-plugin-include'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { unsupportedInbox } from '@deepseek-ai/dsh-agent-loop-testkit'
+import { unsupportedInbox, unsupportedModel } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { loadOverlayPatches } from '@deepseek-ai/dsh-app-boot'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
@@ -23,6 +23,7 @@ import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import type { ToolExecutionResult } from '@deepseek-ai/dsh-tools'
+import { executeToolFixture } from '@deepseek-ai/dsh-tool-testkit'
 import * as ToolFollowUpTask from '../src/index.ts'
 
 const BIN_NAME = 'follow-up-task-test'
@@ -138,6 +139,7 @@ async function createAgent(ctx: Context): Promise<Agent> {
     id,
     options: {},
     session,
+    model: unsupportedModel(),
     inbox: unsupportedInbox(),
     status: 'idle',
     ctx: scope.ctx,
@@ -161,7 +163,7 @@ function executeCall(
   callId: string,
   args: Record<string, unknown>,
 ): Promise<ToolExecutionResult> {
-  return ctx.tools.execute({
+  return executeToolFixture(ctx, {
     name,
     callId: ToolCallId(callId),
     arguments: args,
@@ -207,13 +209,13 @@ describe('follow-up task tools through real Loader composition', () => {
   it('unregisters both tools and the projection when the tool row disposes', async () => {
     const ctx = await boot()
     const agent = await createAgent(ctx)
-    expect(ctx.sessionProjections.stateOf(agent.session, 'followUpTasks')).toBeDefined()
+    expect(ctx.sessionProjections.checkpoint(agent.session)).toHaveProperty('followUpTasks')
     const entry = [...ctx.loader.entries()]
       .find(candidate => candidate.options.id === 'tool-follow-up-task')
     expect(entry?.fiber).toBeDefined()
     await entry!.fiber!.dispose()
     expect(ctx.tools.get(SUGGEST_TOOL_NAME)).toBeUndefined()
     expect(ctx.tools.get(DISMISS_TOOL_NAME)).toBeUndefined()
-    expect(ctx.sessionProjections.stateOf(agent.session, 'followUpTasks')).toBeUndefined()
+    expect(ctx.sessionProjections.checkpoint(ctx.sessions.create())).not.toHaveProperty('followUpTasks')
   })
 })

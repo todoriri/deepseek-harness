@@ -11,12 +11,10 @@ import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import type { Session } from '@deepseek-ai/dsh-session'
 import { delegationDepthOf } from '@deepseek-ai/dsh-subagent'
 // Type-only: resolves the required ctx.sessionProjections service declaration.
 import type {} from '@deepseek-ai/dsh-session-projection'
 import { followUpTasksProjection, SUGGEST_TOOL_NAME } from './projection.ts'
-import type { FollowUpTasksState } from './projection.ts'
 import type { FollowUpTaskDismissedMeta, FollowUpTaskSuggestedMeta } from './contract.ts'
 
 export type * from './contract.ts'
@@ -62,21 +60,6 @@ const DISMISS_AGENTLESS_REFUSAL = 'dismiss_follow_up_task requires a calling age
 /** Refusal when a delegated subagent calls the dismiss tool. */
 const DISMISS_SUBAGENT_REFUSAL = 'Only the top-level agent can dismiss follow-up tasks.'
 
-/** Misconfiguration refusal when the projection key is absent. */
-const MISSING_PROJECTION_REFUSAL = 'tool-follow-up-task: the followUpTasks projection is not registered'
-
-/**
- * Read the `followUpTasks` projection state or fail as misconfigured.
- * @param ctx - hosting context carrying the session-projection registry.
- * @param session - Session whose fold supplies the suggesting history.
- * @returns the current fold state.
- */
-function requireFollowUpTasksState(ctx: Context, session: Session): FollowUpTasksState {
-  const state = ctx.sessionProjections.stateOf(session, 'followUpTasks')
-  if (state === undefined) throw new Error(MISSING_PROJECTION_REFUSAL)
-  return state
-}
-
 /**
  * Refusal text for one empty task field.
  * @param field - the empty parameter name.
@@ -110,8 +93,8 @@ function unknownTaskRefusal(taskId: string): string {
  * @param ctx - tool and session-projection registry scope.
  * @param config - deployment's per-turn suggestion limit.
  */
-export function apply(ctx: Context, config: Config): void {
-  ctx.sessionProjections.register(followUpTasksProjection)
+export async function apply(ctx: Context, config: Config): Promise<void> {
+  const projection = await ctx.sessionProjections.register(followUpTasksProjection)
   ctx.tools.register(defineTool({
     name: SUGGEST_TOOL_NAME,
     description: DESCRIPTION,
@@ -153,7 +136,7 @@ export function apply(ctx: Context, config: Config): void {
       if (summary.length === 0) throw new Error(emptyFieldRefusal('summary'))
       const prompt = args.prompt.trim()
       if (prompt.length === 0) throw new Error(emptyFieldRefusal('prompt'))
-      const state = requireFollowUpTasksState(ctx, agent.session)
+      const state = projection.stateOf(agent.session)
       if (state.openTurnCalls !== null) {
         const index = state.openTurnCalls.indexOf(exec.callId)
         const position = index === -1 ? state.openTurnCalls.length + 1 : index + 1
@@ -190,7 +173,7 @@ export function apply(ctx: Context, config: Config): void {
       const agent = exec.agent
       if (agent === undefined) throw new Error(DISMISS_AGENTLESS_REFUSAL)
       if (delegationDepthOf(agent) > 0) throw new Error(DISMISS_SUBAGENT_REFUSAL)
-      const state = requireFollowUpTasksState(ctx, agent.session)
+      const state = projection.stateOf(agent.session)
       if (!state.suggested.includes(args.taskId)) throw new Error(unknownTaskRefusal(args.taskId))
       return Promise.resolve({ taskId: args.taskId })
     },

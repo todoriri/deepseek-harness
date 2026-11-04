@@ -9,14 +9,8 @@ import { z as zod } from 'zod'
 import type { ZodType } from 'zod'
 import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
 // Type-only: resolves the `tool/ptc-dispatch*` Session event declarations.
-import type {} from '@deepseek-ai/dsh-tools/types'
+import type {} from '@deepseek-ai/dsh-tool-executor-ptc/types'
 import type { FollowUpTaskSuggestedMeta } from './contract.ts'
-
-declare module '@deepseek-ai/dsh-session-projection/types' {
-  interface SessionProjectionStateMap {
-    followUpTasks: FollowUpTasksState
-  }
-}
 
 /**
  * Host-only fold state of the `followUpTasks` projection. Neither field is

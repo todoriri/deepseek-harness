@@ -2,7 +2,8 @@
  * The `followUpTasks` projection provider: suggest-call positions in the open
  * turn and the identity of every successful suggestion, folded from committed
  * Session events so the tools never scan history. Mounted beside the registry
- * it serves the host-only key; unmounting it removes the key (HMR safety).
+ * it serves the host-only key; unmounting it leaves live participation, so a
+ * later Session gets no row (HMR safety).
  */
 
 import { describe, expect, it } from 'vitest'
@@ -16,31 +17,44 @@ import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import * as FollowUpTasks from '../src/index.ts'
-import { SUGGEST_TOOL_NAME, isSuggestedMeta } from '../src/projection.ts'
+import { SUGGEST_TOOL_NAME, followUpTasksProjection, isSuggestedMeta } from '../src/projection.ts'
 import type { FollowUpTasksState } from '../src/projection.ts'
 
 interface Bench {
   ctx: Context
   session: Session
+  /** Host-side fold read through the definition's registration handle. */
+  state: () => FollowUpTasksState
 }
 
-/** Boot the registry services and, unless deferred, this package's plugin. */
-async function harness(withPlugin = true): Promise<Bench> {
+/** Boot the registry services and register the projection definition. */
+async function harness(): Promise<Bench> {
+  const ctx = await services()
+  const handle = await ctx.sessionProjections.register(followUpTasksProjection)
+  const session = await rootSession(ctx)
+  return { ctx, session, state: () => handle.stateOf(session) }
+}
+
+/** Boot the services the projection and this package's plugin require. */
+async function services(): Promise<Context> {
   const ctx = new Context()
   await ctx.plugin(SessionStore)
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
   await ctx.plugin(AgentRegistry)
   await ctx.plugin(SessionProjectionRegistry)
-  if (withPlugin) await ctx.plugin(FollowUpTasks)
-  const session = ctx.sessions.create()
-  await ctx.agents.register({ id: session.id, session, status: 'idle', ctx } as Agent)
-  return { ctx, session }
+  return ctx
 }
 
-/** Read the host-side fold through the registry's public read face. */
-function state(bench: Bench): FollowUpTasksState | undefined {
-  return bench.ctx.sessionProjections.stateOf(bench.session, 'followUpTasks')
+/** Create a Session with an idle root Agent. */
+async function rootSession(ctx: Context): Promise<Session> {
+  const session = ctx.sessions.create()
+  await ctx.agents.register({ id: session.id, session, status: 'idle', ctx } as Agent)
+  return session
+}
+
+function state(bench: Bench): FollowUpTasksState {
+  return bench.state()
 }
 
 function startTurn(session: Session, turn = 1): void {
@@ -136,9 +150,9 @@ describe('followUpTasks projection provider', () => {
     startTurn(bench.session)
     expect(state(bench)).toEqual({ openTurnCalls: [], suggested: [] })
     callTool(bench.session, ToolCallId('call-1'), SUGGEST_TOOL_NAME)
-    expect(state(bench)?.openTurnCalls).toEqual(['call-1'])
+    expect(state(bench).openTurnCalls).toEqual(['call-1'])
     endTurn(bench.session)
-    expect(state(bench)?.openTurnCalls).toBeNull()
+    expect(state(bench).openTurnCalls).toBeNull()
   })
 
   it('appends native suggest calls to the open turn in log order', async () => {
@@ -147,7 +161,7 @@ describe('followUpTasks projection provider', () => {
     callTool(bench.session, ToolCallId('call-a'), SUGGEST_TOOL_NAME)
     callTool(bench.session, ToolCallId('call-other'), 'read')
     callTool(bench.session, ToolCallId('call-b'), SUGGEST_TOOL_NAME)
-    expect(state(bench)?.openTurnCalls).toEqual(['call-a', 'call-b'])
+    expect(state(bench).openTurnCalls).toEqual(['call-a', 'call-b'])
   })
 
   it('appends PTC suggest dispatches by sub-call id', async () => {
@@ -155,7 +169,7 @@ describe('followUpTasks projection provider', () => {
     startTurn(bench.session)
     startDispatch(bench.session, ToolCallId('root:ptc:0'), SUGGEST_TOOL_NAME)
     startDispatch(bench.session, ToolCallId('root:ptc:1'), 'read')
-    expect(state(bench)?.openTurnCalls).toEqual(['root:ptc:0'])
+    expect(state(bench).openTurnCalls).toEqual(['root:ptc:0'])
   })
 
   it('ignores other tools and suggest calls outside an open turn, keeping the state reference', async () => {
@@ -182,7 +196,7 @@ describe('followUpTasks projection provider', () => {
     const ptcCall = ToolCallId('root:ptc:0')
     startDispatch(bench.session, ptcCall, SUGGEST_TOOL_NAME)
     appendDispatch(bench.session, ptcCall, suggestedMeta(ptcCall))
-    expect(state(bench)?.suggested).toEqual([nativeCall, ptcCall])
+    expect(state(bench).suggested).toEqual([nativeCall, ptcCall])
   })
 
   it('ignores results and dispatches without suggested meta', async () => {
@@ -228,13 +242,14 @@ describe('followUpTasks projection provider', () => {
     expect(isSuggestedMeta(suggestedMeta(ToolCallId('call-1')))).toBe(true)
   })
 
-  it('drops the key when the plugin fiber unloads (HMR safety)', async () => {
-    const bench = await harness(false)
-    startTurn(bench.session)
-    expect(state(bench)).toBeUndefined()
-    const fiber = await bench.ctx.plugin(FollowUpTasks)
-    expect(state(bench)).toEqual({ openTurnCalls: [], suggested: [] })
+  it('registers the key with the plugin and leaves live participation when its fiber unloads (HMR safety)', async () => {
+    const ctx = await services()
+    const session = await rootSession(ctx)
+    startTurn(session)
+    expect(ctx.sessionProjections.checkpoint(session)).not.toHaveProperty('followUpTasks')
+    const fiber = await ctx.plugin(FollowUpTasks)
+    expect(ctx.sessionProjections.checkpoint(session).followUpTasks?.val).toEqual({ openTurnCalls: [], suggested: [] })
     await fiber.dispose()
-    expect(state(bench)).toBeUndefined()
+    expect(ctx.sessionProjections.checkpoint(await rootSession(ctx))).not.toHaveProperty('followUpTasks')
   })
 })

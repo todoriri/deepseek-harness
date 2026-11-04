@@ -4,7 +4,7 @@
  * subagent, empty field, per-turn cap).
  */
 
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import { Config } from '../src/index.ts'
@@ -23,7 +23,6 @@ const AGENTLESS_REFUSAL = 'suggest_follow_up_task requires a calling agent.'
 
 const SUBAGENT_REFUSAL = 'Only the top-level agent can suggest follow-up tasks; report this follow-up to your parent agent instead.'
 
-const MISSING_PROJECTION_REFUSAL = 'tool-follow-up-task: the followUpTasks projection is not registered'
 
 const ARGS = {
   title: 'Fix the stale config example in README',
@@ -176,18 +175,11 @@ describe('suggest_follow_up_task', () => {
     })
   })
 
-  it('fails loudly when the projection key is absent', async () => {
-    const bench = await harness()
-    vi.spyOn(bench.ctx.sessionProjections, 'stateOf').mockReturnValue(undefined)
-    const result = await executeCall(bench, SUGGEST_TOOL_NAME, ToolCallId('call-1'), ARGS)
-    expect(refusalOf(result)).toBe(MISSING_PROJECTION_REFUSAL)
-  })
-
   it('removes the tool and the projection when the plugin fiber unloads', async () => {
     const bench = await harness()
     expect(bench.ctx.tools.get(SUGGEST_TOOL_NAME, bench.agent)).toBeDefined()
     await bench.fiber.dispose()
     expect(bench.ctx.tools.get(SUGGEST_TOOL_NAME, bench.agent)).toBeUndefined()
-    expect(bench.ctx.sessionProjections.stateOf(bench.session, 'followUpTasks')).toBeUndefined()
+    expect(bench.ctx.sessionProjections.checkpoint(bench.ctx.sessions.create())).not.toHaveProperty('followUpTasks')
   })
 })

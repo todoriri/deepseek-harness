@@ -4,7 +4,7 @@
  * unknown task).
  */
 
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { ToolCallId, createToolResultMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { ToolExecutionResult } from '@deepseek-ai/dsh-tools'
@@ -21,7 +21,6 @@ const AGENTLESS_REFUSAL = 'dismiss_follow_up_task requires a calling agent.'
 
 const SUBAGENT_REFUSAL = 'Only the top-level agent can dismiss follow-up tasks.'
 
-const MISSING_PROJECTION_REFUSAL = 'tool-follow-up-task: the followUpTasks projection is not registered'
 
 /** Build one complete suggestion record for a logged result. */
 function suggestedMeta(taskId: ToolCallId) {
@@ -126,14 +125,6 @@ describe('dismiss_follow_up_task', () => {
     const bench = await harness({ agentOptions: { subagentDepth: 1 } })
     const result = await executeCall(bench, DISMISS_TOOL_NAME, ToolCallId('call-1'), { taskId: 'call-1' })
     expect(refusalOf(result)).toBe(SUBAGENT_REFUSAL)
-  })
-
-  it('fails loudly when the projection key is absent', async () => {
-    const bench = await harness()
-    appendSuggestedResult(bench, ToolCallId('call-1'))
-    vi.spyOn(bench.ctx.sessionProjections, 'stateOf').mockReturnValue(undefined)
-    const result = await executeCall(bench, DISMISS_TOOL_NAME, ToolCallId('call-2'), { taskId: 'call-1' })
-    expect(refusalOf(result)).toBe(MISSING_PROJECTION_REFUSAL)
   })
 
   it('succeeds when the same task is dismissed twice', async () => {
