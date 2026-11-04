@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-experimental-tool-follow-up-task",
   "description": "Model tools that suggest follow-up tasks the user can start as new sessions",
-  "version": "0.2.1-rc.5",
+  "version": "0.2.2-rc.1",
   "publishConfig": {
     "access": "public"
   },

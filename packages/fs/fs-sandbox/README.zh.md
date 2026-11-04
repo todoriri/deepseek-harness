@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-`dsh-fs-sandbox` 按各会话的沙箱模式限制模型对文件的写入与编辑，同时保留本地文件系统的读取行为。`read-only` 拒绝所有变更；`workspace-write` 只允许目标位于会话工作区或平台临时根目录内；`danger-full-access` 不限制变更。当会话需要将文件变更限制在工作区内时，使用它代替 `fs-local`，并加载 `ctx.sandboxPolicy`。被拒绝的操作返回 `FS_SANDBOX_DENIED`，文件系统工具会显示当前模式和同轮次升级提示。
+`dsh-fs-sandbox` 按各会话的沙箱模式限制模型对文件的写入、编辑、打补丁、删除与移动，同时保留本地文件系统的读取行为。`read-only` 拒绝所有变更；`workspace-write` 只允许目标位于会话工作区或平台临时根目录内；`danger-full-access` 不限制变更。当会话需要将文件变更限制在工作区内时，使用它代替 `fs-local`，并加载 `ctx.sandboxPolicy`。被拒绝的操作返回 `FS_SANDBOX_DENIED`，文件系统工具会显示当前模式和同轮次升级提示。
 
 ## 目录
 
@@ -24,6 +24,8 @@ kind: "package-reference"
 
 <a id="use-this-package"></a>
 ## 使用本包
+
+围栏覆盖 `writeText`、`editText`、`patchText`、`deleteFile` 和 `moveFile`。移动在任何效果发生前检查源与目标，因此任一路径被拒都会使两端文件保持不变。
 
 当模型的文件写入与编辑必须受会话沙箱模式约束时，挂载此后端以替代 `fs-local`。读取默认不受约束；当模型属于不可信代码时设置 `fenceReads: true`，把读取工具一并约束到相同的根目录。围栏按调用生效：工具层把调用会话的模式与工作区根目录解析为与 bash runner 收到的相同策略，因此文件系统与 shell 两个能力族绝不会约束到不同根目录。
 
@@ -46,7 +48,7 @@ kind: "package-reference"
 
 ### 围栏行为
 
-有效模式来自调用会话的覆盖值或升级授权，两者都未生效时才回退到部署默认值。`read-only` 以结构化 `FS_SANDBOX_DENIED` 拒绝所有变更。`workspace-write` 只允许目标规范化后位于工作区根目录或平台临时目录（`os.tmpdir()`，遵循 `TMPDIR`；字面量 `/tmp` 只有在解析到同一目录时才是根目录）之下的变更——与 Seatbelt profile 授权的可写集合相同（review.16.10 F2，D134）。`danger-full-access` 不加围栏直接委托。
+有效模式来自调用会话的覆盖值或升级授权，两者都未生效时才回退到部署默认值。`read-only` 以结构化 `FS_SANDBOX_DENIED` 拒绝所有变更。`workspace-write` 只允许目标规范化后位于工作区根目录、显式额外可写根目录或平台临时目录（`os.tmpdir()`，遵循 `TMPDIR`；字面量 `/tmp` 只有在解析到同一目录时才是根目录）之下的变更——与 Seatbelt profile 授权的可写集合相同（review.16.10 F2，D134）。`danger-full-access` 不加围栏直接委托。
 
 当 `fenceReads: true` 时，承载内容的读取（`readText`、`streamText`、`readBytes`、`readByteRange`、`listDir`）在 `workspace-write` 下遵循同一策略。该选项只会收窄：`read-only` 与 `danger-full-access` 仍允许所有读取，因此启用它不可能授予会话原本没有的访问权。元数据读取（`stat`、`lstat`）保持不受围栏——它们只暴露存在性与大小，绝不暴露内容。
 
@@ -72,12 +74,12 @@ kind: "package-reference"
 
 | 文件 | 职责 |
 |---|---|
-| [`src/index.ts`](src/index.ts) | `SandboxedFileSystem`：`writeText`/`editText` 上的模式围栏、可选的 `fenceReads` 对 `readText`/`streamText`/`readBytes`/`readByteRange`/`listDir` 的围栏、`sandboxMode` 事实 |
+| [`src/index.ts`](src/index.ts) | `SandboxedFileSystem`：`writeText`/`editText`/`patchText`/`deleteFile`/`moveFile` 上的模式围栏、可选的 `fenceReads` 对 `readText`/`streamText`/`readBytes`/`readByteRange`/`listDir` 的围栏、`sandboxMode` 事实 |
 | [`src/containment.ts`](src/containment.ts) | 祖先包含检查，带词法快速路径与基于身份的兜底 |
 
 ### 变更如何被围栏
 
-每次变更先解析按调用策略（`danger-full-access` 原样返回调用方目标；`read-only` 抛出 `FS_SANDBOX_DENIED`），`workspace-write` 则立即重新规范化目标，并要求它位于由唯一的 `writableRoots` 函数派生的某个可写根之下——与 Seatbelt profile 授权的集合相同，因此 fs 围栏与 bash runner 不会漂移。被变更的正是这个新目标，因此工具解析后被替换的符号链接祖先也会被发现。变更随后按描述符固定目标目录（`fs-local` 的 `verifyOpens`，由本后端启用）：暂存目录、其中的文件以及发布时的 rename 全部经由 `/proc/self/fd/<dirfd>/…`，因此在该包含检查之后被替换的组件也无法改写写入的落点。
+每次变更先解析按调用策略（`danger-full-access` 原样返回调用方目标；`read-only` 抛出 `FS_SANDBOX_DENIED`），`workspace-write` 则立即重新规范化目标，并要求它位于由唯一的 `writableRoots` 函数派生的某个可写根之下——与 Seatbelt profile 授权的集合相同，因此 fs 围栏与 bash runner 不会漂移。被变更的正是这个新目标，因此工具解析后被替换的符号链接祖先也会被发现。写入或编辑随后按描述符固定目标目录（`fs-local` 的 `verifyOpens`，由本后端启用）：暂存目录、其中的文件以及发布时的 rename 全部经由 `/proc/self/fd/<dirfd>/…`，因此在该包含检查之后被替换的组件也无法改写其落点。`patchText`、`deleteFile` 与 `moveFile` 按路径变更这个新目标。
 
 ### 读取如何被围栏
 
@@ -85,7 +87,7 @@ kind: "package-reference"
 
 ### 威胁模型
 
-在 Linux 上，解析到系统调用之间的窗口由描述符固定关闭：读取先 open 并核验所打开的描述符正是被解析的目标，变更则按描述符固定目标目录，因此被限制的 worker 换入路径的符号链接不再能改写这两种操作。在没有 `/proc/self/fd` 的地方（Node 不提供 `openat`），这些原语不生效，窗口仍然存在——后端会报告这一平台事实，而不是隐瞒它。拒绝是结构化 `FsError`，而不是 stderr 推断——进程内围栏准确知道自己拒绝了什么。
+在 Linux 上，解析到系统调用之间的窗口由描述符固定关闭：读取先 open 并核验所打开的描述符正是被解析的目标，写入或编辑则按描述符固定目标目录，因此被限制的 worker 换入路径的符号链接不再能改写这些操作；补丁、删除与移动仍保留该窗口。在没有 `/proc/self/fd` 的地方（Node 不提供 `openat`），这些原语不生效，窗口仍然存在——后端会报告这一平台事实，而不是隐瞒它。拒绝是结构化 `FsError`，而不是 stderr 推断——进程内围栏准确知道自己拒绝了什么。
 
 </details>
 
@@ -129,7 +131,7 @@ kind: "package-reference"
 
 这些限制说明沙箱后端何时不合适，或何时需要特别的运维注意。它们是当前包约束，不是通用沙箱对比或任务积压。
 
-- **策略围栏，而非内核边界**：该检查是可信代码处理模型控制的路径。在 Linux 上，描述符固定关闭了围栏自身操作的解析到系统调用窗口；在没有 `/proc/self/fd` 的主机上该窗口仍然存在，而对抗性宿主进程在任何情况下都不在范围内。不可信代码的内核级隔离仍属于 `ctx.shell`。
+- **策略围栏，而非内核边界**：该检查是可信代码处理模型控制的路径。在 Linux 上，描述符固定关闭了读取、写入与编辑的解析到系统调用窗口，补丁、删除与移动仍保留该窗口；在没有 `/proc/self/fd` 的主机上该窗口仍然存在，而对抗性宿主进程在任何情况下都不在范围内。不可信代码的内核级隔离仍属于 `ctx.shell`。
 - **围栏与 runner 的一致性由单一所有方派生**：可写集合来自 `writableRoots`，该函数与 Seatbelt profile 共享；在其他位置定义可写集合的 runner profile 会发生漂移。
 - **要求 `ctx.sandboxPolicy`**：工具使用它解析每个会话策略，后端用它处理无 agent（智能体）调用的回退；未组合该服务时，后端不会实施约束。
 

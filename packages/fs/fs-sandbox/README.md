@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-`dsh-fs-sandbox` confines model file writes and edits according to each session's sandbox mode while preserving the local filesystem's read behavior. In `read-only`, it rejects every mutation; in `workspace-write`, it permits targets only inside the session workspace or a platform temporary root; in `danger-full-access`, it does not restrict mutations. Use it instead of `fs-local` with `ctx.sandboxPolicy` when sessions need workspace-confined file changes. Denied operations return `FS_SANDBOX_DENIED`, which filesystem tools present with the active mode and a same-turn escalation hint.
+`dsh-fs-sandbox` confines model file writes, edits, patches, deletions, and moves according to each session's sandbox mode while preserving the local filesystem's read behavior. In `read-only`, it rejects every mutation; in `workspace-write`, it permits targets only inside the session workspace or a platform temporary root; in `danger-full-access`, it does not restrict mutations. Use it instead of `fs-local` with `ctx.sandboxPolicy` when sessions need workspace-confined file changes. Denied operations return `FS_SANDBOX_DENIED`, which filesystem tools present with the active mode and a same-turn escalation hint.
 
 ## Table of Contents
 
@@ -24,6 +24,8 @@ English | [中文](README.zh.md)
 
 <a id="use-this-package"></a>
 ## Use this package
+
+The fence covers `writeText`, `editText`, `patchText`, `deleteFile`, and `moveFile`. A move checks both source and destination before either effect, so a denied path leaves both files untouched.
 
 Mount this backend instead of `fs-local` when the model's file writes and edits must be confined by the session's sandbox mode. Reads stay unconfined by default; set `fenceReads: true` when the model is untrusted code, which contains the reading tools to the same roots. The fence applies per call: the tool layer resolves the calling session's mode and workspace root into the same policy the bash runner receives, so the filesystem and shell families never confine to different roots.
 
@@ -46,7 +48,7 @@ Alongside the local backend's knobs (`cwd` resolution default and `diffBasisMaxB
 
 ### How the fence behaves
 
-The effective mode comes from the calling session's override or escalation grant, falling back to the deployment default when neither is in force. `read-only` denies every mutation with the structured `FS_SANDBOX_DENIED`. `workspace-write` allows a mutation only when the target canonicalizes under the workspace root or the platform temp dir (`os.tmpdir()`, which honours `TMPDIR`; the literal `/tmp` is a root exactly when it resolves to the same directory) — the same writable set the Seatbelt profile grants (review.16.10 F2, D134). `danger-full-access` delegates unfenced.
+The effective mode comes from the calling session's override or escalation grant, falling back to the deployment default when neither is in force. `read-only` denies every mutation with the structured `FS_SANDBOX_DENIED`. `workspace-write` allows a mutation only when the target canonicalizes under the workspace root, an explicit additional writable root, or the platform temp dir (`os.tmpdir()`, which honours `TMPDIR`; the literal `/tmp` is a root exactly when it resolves to the same directory) — the same writable set the Seatbelt profile grants (review.16.10 F2, D134). `danger-full-access` delegates unfenced.
 
 With `fenceReads: true`, the content-bearing reads (`readText`, `streamText`, `readBytes`, `readByteRange`, `listDir`) follow that same policy under `workspace-write`. The option only ever NARROWS: `read-only` and `danger-full-access` keep permitting every read, so enabling it cannot grant access a session did not already have. Metadata reads (`stat`, `lstat`) stay unfenced — they expose existence and size, never content.
 
@@ -72,12 +74,12 @@ The fence is a policy check in trusted code over a model-controlled path — not
 
 | File | Role |
 |---|---|
-| [`src/index.ts`](src/index.ts) | `SandboxedFileSystem`: mode fence on `writeText`/`editText`, the optional `fenceReads` fence on `readText`/`streamText`/`readBytes`/`readByteRange`/`listDir`, `sandboxMode` fact |
+| [`src/index.ts`](src/index.ts) | `SandboxedFileSystem`: mode fence on `writeText`/`editText`/`patchText`/`deleteFile`/`moveFile`, the optional `fenceReads` fence on `readText`/`streamText`/`readBytes`/`readByteRange`/`listDir`, `sandboxMode` fact |
 | [`src/containment.ts`](src/containment.ts) | Ancestor containment check with lexical fast path and identity-based fallback |
 
 ### How a mutation is fenced
 
-Each mutation resolves the per-call policy (`danger-full-access` returns the caller's target untouched; `read-only` throws `FS_SANDBOX_DENIED`), then for `workspace-write` re-canonicalizes the target immediately and requires containment under one of the writable roots derived from the single `writableRoots` function — the same set the Seatbelt profile grants, so the fs fence and the bash runner cannot drift. The fresh target is the one mutated, so a symlink ancestor swapped since the tool resolved it is caught. The mutation then pins the destination directory by DESCRIPTOR (`fs-local`'s `verifyOpens`, which this backend enables): the staging directory, its file and the publication rename all go through `/proc/self/fd/<dirfd>/…`, so a component swapped after this containment check cannot redirect the write either.
+Each mutation resolves the per-call policy (`danger-full-access` returns the caller's target untouched; `read-only` throws `FS_SANDBOX_DENIED`), then for `workspace-write` re-canonicalizes the target immediately and requires containment under one of the writable roots derived from the single `writableRoots` function — the same set the Seatbelt profile grants, so the fs fence and the bash runner cannot drift. The fresh target is the one mutated, so a symlink ancestor swapped since the tool resolved it is caught. A write or edit then pins the destination directory by DESCRIPTOR (`fs-local`'s `verifyOpens`, which this backend enables): the staging directory, its file and the publication rename all go through `/proc/self/fd/<dirfd>/…`, so a component swapped after this containment check cannot redirect it either. `patchText`, `deleteFile` and `moveFile` mutate the fresh target by path.
 
 ### How a read is fenced
 
@@ -85,7 +87,7 @@ Only when `fenceReads` is enabled, and only under `workspace-write`: the guard r
 
 ### Threat model
 
-On Linux the resolve-to-syscall window is closed by DESCRIPTOR PINNING: a read opens first and verifies the descriptor it opened against the resolved target, and a mutation pins the destination directory, so a symlink a confined worker swaps into the path no longer redirects either operation. Where `/proc/self/fd` is unavailable (Node exposes no `openat`), those primitives are inert and the window remains — the backend reports that platform fact rather than hiding it. A denial is a structured `FsError`, not stderr inference — an in-process fence knows exactly what it refused.
+On Linux the resolve-to-syscall window is closed by DESCRIPTOR PINNING: a read opens first and verifies the descriptor it opened against the resolved target, and a write or edit pins the destination directory, so a symlink a confined worker swaps into the path no longer redirects those operations; a patch, delete or move keeps the window. Where `/proc/self/fd` is unavailable (Node exposes no `openat`), those primitives are inert and the window remains — the backend reports that platform fact rather than hiding it. A denial is a structured `FsError`, not stderr inference — an in-process fence knows exactly what it refused.
 
 </details>
 
@@ -129,7 +131,7 @@ A standing-policy change appends an owner-rendered superseding runtime-context s
 
 These limits define when the sandbox backend is a poor fit or needs special operational care. They are current package constraints, not a general sandbox comparison or a task backlog.
 
-- **A policy fence, not a kernel boundary** — the check is trusted code over a model-controlled path. On Linux descriptor pinning closes the resolve-to-syscall window for the fence's own operations; on a host without `/proc/self/fd` that window remains, and adversarial host processes are out of scope either way. Kernel-grade isolation of untrusted code stays `ctx.shell`'s.
+- **A policy fence, not a kernel boundary** — the check is trusted code over a model-controlled path. On Linux descriptor pinning closes the resolve-to-syscall window for reads, writes and edits, while patches, deletes and moves keep it; on a host without `/proc/self/fd` that window remains, and adversarial host processes are out of scope either way. Kernel-grade isolation of untrusted code stays `ctx.shell`'s.
 - **Fence-vs-runner parity is derived from one owner** — the writable set comes from `writableRoots`, shared with the Seatbelt profile; a runner profile that defines its writable set elsewhere would drift.
 - **Requires `ctx.sandboxPolicy`** — tools use it to resolve each session policy and the backend uses it for agentless-call fallbacks; the backend does not confine without it composed.
 

@@ -4,7 +4,7 @@
  * text-storage mechanics — resolve, stat, read/stream, list, the atomic
  * write and the read-match-write edit critical section — are the local
  * implementation's, verbatim; this package adds the per-call POLICY fence on
- * the two mutations, and — when `fenceReads` is enabled — the same containment
+ * all five mutations, and — when `fenceReads` is enabled — the same containment
  * fence on the content-bearing reads. By DEFAULT reads pass through untouched:
  * every mode permits reading. An operator whose deployment treats the model as
  * untrusted code rather than as a cooperative author turns the read fence on,
@@ -22,23 +22,25 @@
  * ACTUALLY opened, so this backend also turns on the local backend's
  * descriptor-level verification (`verifyOpens`): a read opens the canonical
  * target, verifies that the descriptor's reported path IS that target, and serves
- * the bytes from the descriptor; a mutation pins the destination directory by
- * descriptor and stages/publishes through it. A symlink swapped into the path
- * after the containment check therefore fails the operation instead of escaping
- * the fence. That primitive needs `/proc/self/fd`
+ * the bytes from the descriptor; `writeText` and `editText` pin the destination
+ * directory by descriptor and stage/publish through it. A symlink swapped into
+ * the path after the containment check therefore fails the read, write or edit
+ * instead of escaping the fence; `patchText`, `deleteFile` and `moveFile` keep
+ * the resolve-then-mutate window. That primitive needs `/proc/self/fd`
  * (`dsh-fs-local`'s `FD_PINNING_AVAILABLE`); on a host without it verification is
  * inert and this fence keeps its resolve-then-open window — see the README's
  * "not verified" note.
  *
  * Per-call policy: `read-only` denies every mutation; `workspace-write` allows
  * a mutation only when the target canonicalizes under the policy's workspace
- * root or a platform temp area from the shared `writableRoots` policy;
- * `danger-full-access` delegates unfenced. A denial throws the structured
- * `FS_SANDBOX_DENIED`. With `fenceReads` enabled the CONTENT-bearing reads
- * (`readText`, `streamText`, `readBytes`, `readByteRange`, `listDir`) follow the
- * same per-call policy under `workspace-write` — a confinement, never a grant:
- * `read-only` and `danger-full-access` stay unfenced for reads, so the option
- * can only narrow what was already permitted.
+ * root, an explicit additional writable root, or a platform temp area from the
+ * shared `writableRoots` policy; `danger-full-access` delegates unfenced. A
+ * denial throws the structured `FS_SANDBOX_DENIED`. With `fenceReads` enabled
+ * the CONTENT-bearing reads (`readText`, `streamText`, `readBytes`,
+ * `readByteRange`, `listDir`) follow the same per-call policy under
+ * `workspace-write` — a confinement, never a grant: `read-only` and
+ * `danger-full-access` stay unfenced for reads, so the option can only narrow
+ * what was already permitted.
  *
  * @module @deepseek-ai/dsh-fs-sandbox
  */
@@ -48,7 +50,7 @@ import z from '@deepseek-ai/schemastery'
 import { LocalFileSystem, DEFAULT_DIFF_BASIS_MAX_BYTES, MAX_DIFF_BASIS_BYTES } from '@deepseek-ai/dsh-fs-local'
 import type { Config as LocalConfig } from '@deepseek-ai/dsh-fs-local'
 import { FsError } from '@deepseek-ai/dsh-fs'
-import type { FsDirEntry, FsEditOutcome, FsEditRequest, FsTarget, FsVersion, FsWriteIntent, FsWriteOutcome } from '@deepseek-ai/dsh-fs'
+import type { FsDeleteOutcome, FsDirEntry, FsEditOutcome, FsEditRequest, FsMoveOutcome, FsTarget, FsVersion, FsWriteIntent, FsWriteOutcome } from '@deepseek-ai/dsh-fs'
 import { writableRoots } from '@deepseek-ai/dsh-sandbox'
 import type { SandboxExecutionPolicy, SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import type {} from '@deepseek-ai/dsh-sandbox-policy'
@@ -168,6 +170,40 @@ export class SandboxedFileSystem extends LocalFileSystem {
   }
 
   /**
+   * Fence the mutation before delegating to the local provider.
+   * @param sandboxPolicy - per-call mode and workspace root; omit for the deployment fallback.
+   */
+  override async patchText(
+    target: FsTarget, hunks: Parameters<LocalFileSystem['patchText']>[1], expected?: { version: FsVersion },
+    signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy,
+  ): Promise<FsEditOutcome> {
+    return super.patchText(await this.checkedTarget(target, sandboxPolicy), hunks, expected, signal)
+  }
+
+  /**
+   * Fence the mutation before delegating to the local provider.
+   * @param sandboxPolicy - per-call mode and workspace root; omit for the deployment fallback.
+   */
+  override async deleteFile(
+    target: FsTarget, expected?: { version: FsVersion }, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy,
+  ): Promise<FsDeleteOutcome> {
+    return super.deleteFile(await this.checkedTarget(target, sandboxPolicy), expected, signal)
+  }
+
+  /**
+   * Fence the mutation before delegating to the local provider.
+   * @param sandboxPolicy - per-call mode and workspace root; omit for the deployment fallback.
+   */
+  override async moveFile(
+    source: FsTarget, destination: FsTarget, options: Parameters<LocalFileSystem['moveFile']>[2],
+    signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy,
+  ): Promise<FsMoveOutcome> {
+    const checkedSource = await this.checkedTarget(source, sandboxPolicy)
+    const checkedDestination = await this.checkedTarget(destination, sandboxPolicy)
+    return super.moveFile(checkedSource, checkedDestination, options, signal)
+  }
+
+  /**
    * Fence the read by the per-call policy when {@link Config.fenceReads} is on,
    * then delegate to the inherited read. See {@link checkedRead}.
    * @param target - the resolved target to read.
@@ -273,9 +309,9 @@ export class SandboxedFileSystem extends LocalFileSystem {
    * re-canonicalizes NOW (`resolve` realpaths the deepest existing ancestor,
    * reflecting a concurrently swapped symlink), requires containment under a
    * writable root, and returns THAT fresh target; `danger-full-access` returns
-   * the caller's target unfenced. The mutation then pins the destination directory
-   * by descriptor (`verifyOpens`) and stages/publishes through it, so a component
-   * swapped after this check cannot redirect the write either. Throws the
+   * the caller's target unfenced. A write or edit then pins the destination
+   * directory by descriptor (`verifyOpens`) and stages/publishes through it, so a
+   * component swapped after this check cannot redirect it either. Throws the
    * structured `FS_SANDBOX_DENIED` on refusal — the tool layer maps it to the
    * model-facing `[sandbox: …]` marker and the escalation hint.
    */
