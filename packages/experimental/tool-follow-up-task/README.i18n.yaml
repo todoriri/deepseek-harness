@@ -18,8 +18,8 @@
   en: 822ce246840b85c0
   zh: 6b9f805919fa8b34
 /deepseek-ai-dsh-experimental-tool-follow-up-task/understand-the-implementation:
-  en: 220d915b6b962651
-  zh: 5515c945982bf4d8
+  en: 1e721c5b1f94d824
+  zh: 824c0368146e26d9
 /deepseek-ai-dsh-experimental-tool-follow-up-task/further-exploration:
   en: 7f8ed180ef2e6308
   zh: 716bbad7a2e31918
@@ -30,26 +30,26 @@
   en: 057ca9b2e0b61e68
   zh: a9e33b1dd9c3f353
 /deepseek-ai-dsh-experimental-tool-follow-up-task/model-experience/timing-section/what-the-model-sees:
-  en: 8d75a9131ab95714
-  zh: 50134dfa22e40507
+  en: 483f93e77a1f7062
+  zh: 3bc1fac83c711d8b
 /deepseek-ai-dsh-experimental-tool-follow-up-task/model-experience/timing-section/what-the-model-sees/timing-guidance:
   en: 9d1b208ca6bc79d0
   zh: 5a81de4bc58a9a1a
 /deepseek-ai-dsh-experimental-tool-follow-up-task/model-experience/timing-section/token-effect:
-  en: 53796db068651994
-  zh: 48d110fd076eab56
+  en: ca8cb28c9d21af31
+  zh: 0ad6a3f306ea7a75
 /deepseek-ai-dsh-experimental-tool-follow-up-task/model-experience/timing-section/kv-cache-effect:
-  en: d6bc3dac0f337533
-  zh: a995131a30357535
+  en: b1683dd86b9afee9
+  zh: b683f5a165639a6b
 /deepseek-ai-dsh-experimental-tool-follow-up-task/model-experience/suggest-tool:
   en: 31d53b85650e3511
   zh: af03c9edcffbc1c6
 /deepseek-ai-dsh-experimental-tool-follow-up-task/model-experience/suggest-tool/what-the-model-sees:
-  en: f775ec7310d9bb24
-  zh: 680516caca516f9c
+  en: eca1f82e3af415f1
+  zh: b651596c8f7ed036
 /deepseek-ai-dsh-experimental-tool-follow-up-task/model-experience/suggest-tool/token-effect:
-  en: 95abec37cda57a5a
-  zh: c5f193585f187db3
+  en: c7813233db1924aa
+  zh: 71e6ddd9898203f7
 /deepseek-ai-dsh-experimental-tool-follow-up-task/model-experience/suggest-tool/kv-cache-effect:
   en: 2847ff29123002bd
   zh: 4285feb6d61a17d2
@@ -57,17 +57,17 @@
   en: cab42427744892a9
   zh: 4b07038f1951ca48
 /deepseek-ai-dsh-experimental-tool-follow-up-task/model-experience/withdraw-tool/what-the-model-sees:
-  en: 2584fb18083dbce4
-  zh: 3b56b6150edd6246
+  en: 1df13b959b9893fa
+  zh: b0965920c5b037c6
 /deepseek-ai-dsh-experimental-tool-follow-up-task/model-experience/withdraw-tool/token-effect:
-  en: d0fa1a2ad37d6b77
-  zh: cb5777641895d840
+  en: fc0ba8e3aa7fb7fa
+  zh: 99bcff01c5b2a156
 /deepseek-ai-dsh-experimental-tool-follow-up-task/model-experience/withdraw-tool/kv-cache-effect:
   en: 4d9246b9091eda82
   zh: d516790832c4d094
 /deepseek-ai-dsh-experimental-tool-follow-up-task/known-limitations-and-deferred-work:
-  en: 885cad0728e05d58
-  zh: 8ccf0b6e30b2bdc0
+  en: a888e1d2e9b19ce1
+  zh: 0c040139895a4787
 /deepseek-ai-dsh-experimental-tool-follow-up-task/known-limitations-and-deferred-work/dev-note:
   en: e67f633dc6fe7773
   zh: 3bb0c20c93f16f98

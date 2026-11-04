@@ -1,14 +1,15 @@
 /**
  * `dismiss_follow_up_task` behavior: registration shape, withdrawn result text
- * and metadata, and the refusal order (no agent, subagent, missing projection,
- * unknown task).
+ * and metadata, and the refusal order (no agent, missing projection, unknown
+ * task). Step admission keeps the tool out of a delegated subagent's
+ * declarations entirely.
  */
 
 import { describe, expect, it } from 'vitest'
 import { ToolCallId, createToolResultMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import type { ToolExecutionResult } from '@deepseek-ai/dsh-tools'
-import { executeCall, harness, SUGGEST_TOOL_NAME } from './harness.ts'
+import type { ToolExecutionResult, ToolExecutionToken, ToolRunContext } from '@deepseek-ai/dsh-tools'
+import { admittedTools, executeCall, harness, SUGGEST_TOOL_NAME } from './harness.ts'
 import type { Bench } from './harness.ts'
 
 const DISMISS_TOOL_NAME = 'dismiss_follow_up_task'
@@ -18,9 +19,6 @@ const DESCRIPTION = 'Withdraw a follow-up task you suggested earlier in this ses
 const TASK_ID_DESCRIPTION = 'The taskId returned by suggest_follow_up_task.'
 
 const AGENTLESS_REFUSAL = 'dismiss_follow_up_task requires a calling agent.'
-
-const SUBAGENT_REFUSAL = 'Only the top-level agent can dismiss follow-up tasks.'
-
 
 /** Build one complete suggestion record for a logged result. */
 function suggestedMeta(taskId: ToolCallId) {
@@ -115,16 +113,31 @@ describe('dismiss_follow_up_task', () => {
     expect(refusalOf(result)).toBe('No follow-up task with taskId call-9 was suggested in this session.')
   })
 
-  it('refuses a call without an agent', async () => {
+  it('refuses a direct execution without a calling Agent', async () => {
     const bench = await harness()
-    const result = await executeCall(bench, DISMISS_TOOL_NAME, ToolCallId('call-1'), { taskId: 'call-1' }, null)
-    expect(refusalOf(result)).toBe(AGENTLESS_REFUSAL)
+    const definition = bench.ctx.tools.get(DISMISS_TOOL_NAME, bench.agent)
+    if (definition === undefined) throw new Error('dismiss_follow_up_task is not registered')
+    const args = { taskId: 'call-1' }
+    const exec: ToolRunContext = {
+      callId: ToolCallId('direct-dismiss'), rootCallId: ToolCallId('direct-dismiss'), name: DISMISS_TOOL_NAME,
+      arguments: args, token: Symbol('direct-dismiss') as ToolExecutionToken, signal: new AbortController().signal,
+      deferContext() {}, concludeTurn() {},
+    }
+    await expect(definition.execute(args, exec)).rejects.toThrow(AGENTLESS_REFUSAL)
   })
 
-  it('refuses a subagent caller', async () => {
+  it('admits a top-level Agent and hides the tool from a delegated subagent', async () => {
+    const top = await harness()
+    expect((await admittedTools(top)).has(DISMISS_TOOL_NAME)).toBe(true)
+    const child = await harness({ agentOptions: { subagentDepth: 1 } })
+    expect((await admittedTools(child)).has(DISMISS_TOOL_NAME)).toBe(false)
+  })
+
+  it('rejects a delegated subagent call as an unknown tool', async () => {
     const bench = await harness({ agentOptions: { subagentDepth: 1 } })
     const result = await executeCall(bench, DISMISS_TOOL_NAME, ToolCallId('call-1'), { taskId: 'call-1' })
-    expect(refusalOf(result)).toBe(SUBAGENT_REFUSAL)
+    expect(result.isError).toBe(true)
+    expect(result.content).toEqual([{ type: 'text', text: 'Error: unknown tool "dismiss_follow_up_task"' }])
   })
 
   it('succeeds when the same task is dismissed twice', async () => {

@@ -155,21 +155,28 @@ async function createAgent(ctx: Context): Promise<Agent> {
   return value
 }
 
-/** Execute one tool call through the composed runtime. */
-function executeCall(
+/** Execute one tool call through the step admission and the composed runtime. */
+async function executeCall(
   ctx: Context,
   agent: Agent,
   name: string,
   callId: string,
   args: Record<string, unknown>,
 ): Promise<ToolExecutionResult> {
-  return executeToolFixture(ctx, {
-    name,
-    callId: ToolCallId(callId),
-    arguments: args,
-    signal: new AbortController().signal,
-    agent,
-  })
+  const signal = new AbortController().signal
+  const toolSet = await ctx.tools.resolve({ agent, modelSelection: { provider: 'test', model: 'test' }, signal })
+  try {
+    return await executeToolFixture(ctx, {
+      name,
+      callId: ToolCallId(callId),
+      arguments: args,
+      signal,
+      agent,
+      toolSet,
+    })
+  } finally {
+    toolSet.dispose()
+  }
 }
 
 describe('follow-up task tools through real Loader composition', () => {

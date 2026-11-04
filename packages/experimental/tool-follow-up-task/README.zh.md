@@ -61,20 +61,20 @@ CLI 将该目录记录为 `link:` 依赖，并把该 bundle 追加到 `dsh.profi
 <details>
 <summary>实现细节——点击展开</summary>
 
-[`src/index.ts`](src/index.ts) 在挂载作用域中注册两个工具、其时机提示段与 `followUpTasks` Session projection；[`src/projection.ts`](src/projection.ts) 折叠该 projection，[`src/contract.ts`](src/contract.ts) 定义 Web 客户端会重新校验的展示 metadata。[`cordis.patch.yml`](cordis.patch.yml) 插入 `tool-follow-up-task` 行与 `client-ui-follow-up-task` 行。
+[`src/index.ts`](src/index.ts) 在挂载作用域中注册带顶层准入步骤条件的两个工具、其时机提示段与 `followUpTasks` Session projection；[`src/projection.ts`](src/projection.ts) 折叠该 projection，[`src/contract.ts`](src/contract.ts) 定义 Web 客户端会重新校验的展示 metadata。[`cordis.patch.yml`](cordis.patch.yml) 插入 `tool-follow-up-task` 行与 `client-ui-follow-up-task` 行。
 
 成功调用写入 `output.presentationMeta`：建议 metadata 携带 `taskId`、保留的 `sessionId`，以及去掉首尾空白的 `title`、`summary` 与 `prompt`；撤回 metadata 携带 `taskId`。core 将其持久化为原生调用的 `tool/result.meta` 或 PTC 子调用的 `tool/ptc-dispatch.meta`。只有成功调用写入 metadata，因此被拒绝的调用永远不会产生卡片。
 
 projection 保存 `openTurnCalls`（当前打开回合内 suggest 调用的 call id，回合外为 null）与 `suggested`（本 Session 中成功建议的 task id，按日志顺序）。初始值为 `{ openTurnCalls: null, suggested: [] }`：`turn/start` 重置打开回合列表，`turn/end` 清空它，`tool/call` 与 `tool/ptc-dispatch-start` 追加 suggest 的 call id，`tool/result` 或 `tool/ptc-dispatch` 中通过校验、携带五个非空字符串的 metadata 追加 `taskId`。其他事件返回同一个状态引用。该 projection 仅限 Host：没有 wire view，Web 客户端从交付的事件构建卡片。
 
-上限从 `openTurnCalls` 读取调用位置：调用索引加一，id 不存在时为列表长度加一；位置超过 `maxSuggestionsPerTurn` 时拒绝。因此同一步骤中的并行调用具有确定的顺序，被拒绝的调用仍占用一个位置。没有调用 Agent、或 Agent 是委派 subagent 的调用会在上限检查之前被拒绝。
+上限从 `openTurnCalls` 读取调用位置：调用索引加一，id 不存在时为列表长度加一；位置超过 `maxSuggestionsPerTurn` 时拒绝。因此同一步骤中的并行调用具有确定的顺序，被拒绝的调用仍占用一个位置。没有调用 Agent 的直接执行会在上限检查之前被拒绝；步骤条件把两个工具排除在委派 subagent 的声明之外，因此 subagent 尝试会作为未知工具失败。
 
 每次成功建议都会生成 `session-${randomUUID()}` 作为保留的 Session 身份；该值返回给模型并存入 metadata。销毁插件会移除工具注册、提示段与 projection 注册。
 
 | 文件 | 职责 |
 |---|---|
 | [`cordis.patch.yml`](cordis.patch.yml) | 插入 Host 工具行与 Web 卡片行 |
-| [`src/index.ts`](src/index.ts) | 注册工具、提示段、拒绝、上限与 projection |
+| [`src/index.ts`](src/index.ts) | 注册带顶层准入的工具、提示段、拒绝、上限与 projection |
 | [`src/projection.ts`](src/projection.ts) | 仅限 Host 的 `followUpTasks` 折叠 |
 | [`src/contract.ts`](src/contract.ts) | 与 Web 客户端共享的展示 metadata 类型 |
 
@@ -100,7 +100,7 @@ projection 保存 `openTurnCalls`（当前打开回合内 suggest 调用的 call
 
 #### 模型看到什么
 
-当 `suggest_follow_up_task` 在当前组装作用域中可见时，系统提示词在 `TOOL_FOLLOW_UP_TASK` 位置携带一句话。这句话说明何时调用该工具；哪些工作符合条件、哪些不符合由工具描述说明。隐藏该工具的作用域（例如拒绝该工具的 preset）不渲染此段。
+当步骤的工具集接纳 `suggest_follow_up_task` 时，系统提示词在 `TOOL_FOLLOW_UP_TASK` 位置携带一句话。这句话说明何时调用该工具；哪些工作符合条件、哪些不符合由工具描述说明。不接纳该工具的步骤不渲染此段：委派 subagent，或拒绝该工具的 preset。
 
 ##### 时机指引
 
@@ -110,21 +110,21 @@ Before your final response, if you noticed worthwhile work outside this request,
 
 #### Token 影响
 
-工具可见时，每个请求都携带这一句固定文字。把该组合包以 patch 挂入 headless profile 后，同一个固定首轮在本地 llama.cpp 分词器上测得加入此段前为 6,001 个提示 token，加入后为 6,028 个；该数字已计入此次从建议工具描述中删去的四个词。
+每个接纳该工具的请求都携带这一句固定文字：在本地 llama.cpp 分词器上为 30 个 token、159 个字符。把该组合包以 patch 挂入 headless profile 后，同一个固定首轮在本地 llama.cpp 分词器上测得加入此段前为 6,001 个提示 token，加入后为 6,028 个；该数字已计入此次从建议工具描述中删去的四个词。准入条件使顶层 Agent 的首轮在本包的 Host 基准中保持逐字节一致；委派 subagent 的请求失去这一句与两个工具 schema——在该基准中为 31 个渲染提示 token 与 359 个工具 schema token（1,719 个字符）。
 
 #### KV Cache 影响
 
-插件保持挂载且工具可见性不变时，前缀保持稳定。挂载、卸载或隐藏该工具会使渲染出的系统提示词变化一次，与任何提示段变化相同。
+插件保持挂载且步骤准入不变时，前缀保持稳定。挂载、卸载或接纳该工具会使渲染出的系统提示词变化一次，与任何提示段变化相同。
 
 ### 建议工具
 
 #### 模型看到什么
 
-[工具目录](../../../docs/tool-catalog.zh.md#deepseek-aidsh-experimental-tool-follow-up-task)拥有准确的说明、参数文本、结果文本与拒绝文本。模型收到带有 `title`、`summary` 与 `prompt` 参数的 `suggest_follow_up_task`。说明告诉它将此工具用于当前请求之外值得做的工作——例如顺带发现的 bug、缺失的测试覆盖、过时的文档或已确认的 TODO——而不要用于当前请求需要的工作、现在就能完成的小修复或推测性想法。它还说明除非用户启动任务，否则不会执行任何内容；用户会看到 `title` 与 `summary` 并检查 `prompt`；`prompt` 必须能够独立使用，因为新 Session 看不到这段会话。成功结果说明任务已展示给用户、只有用户选择才会启动，并让模型继续当前请求。拒绝信息会说明空字段、每回合上限、缺少调用 Agent 或 subagent 调用者。
+[工具目录](../../../docs/tool-catalog.zh.md#deepseek-aidsh-experimental-tool-follow-up-task)拥有准确的说明、参数文本、结果文本与拒绝文本。模型收到带有 `title`、`summary` 与 `prompt` 参数的 `suggest_follow_up_task`；委派 subagent 的步骤准入会将其完全排除在声明之外。说明告诉它将此工具用于当前请求之外值得做的工作——例如顺带发现的 bug、缺失的测试覆盖、过时的文档或已确认的 TODO——而不要用于当前请求需要的工作、现在就能完成的小修复或推测性想法。它还说明除非用户启动任务，否则不会执行任何内容；用户会看到 `title` 与 `summary` 并检查 `prompt`；`prompt` 必须能够独立使用，因为新 Session 看不到这段会话。成功结果说明任务已展示给用户、只有用户选择才会启动，并让模型继续当前请求。拒绝信息会说明空字段、每回合上限或缺少调用 Agent。
 
 #### Token 影响
 
-挂载期间，工具 schema 为每次请求带来固定成本。每次调用将三个参数与一条有界结果或拒绝信息追加到普通工具历史，每回合上限限制了包括被拒绝调用在内的建议数量。
+步骤接纳该工具期间，工具 schema 为每次请求带来固定成本。每次调用将三个参数与一条有界结果或拒绝信息追加到普通工具历史，每回合上限限制了包括被拒绝调用在内的建议数量。
 
 #### KV Cache 影响
 
@@ -134,11 +134,11 @@ Before your final response, if you noticed worthwhile work outside this request,
 
 #### 模型看到什么
 
-[工具目录](../../../docs/tool-catalog.zh.md#deepseek-aidsh-experimental-tool-follow-up-task)拥有准确的说明、参数文本、结果文本与拒绝文本。模型收到只带一个 `taskId` 参数的 `dismiss_follow_up_task`。说明告诉它在本 Session 中撤回此前提出、已不再需要的建议，例如工作已在此处完成或更好的建议取代了它，并说明用户已经启动的 Session 不受影响。成功结果说明任务已撤回；拒绝信息会说明缺少调用 Agent、subagent 调用者，或本 Session 从未建议过的 `taskId`。
+[工具目录](../../../docs/tool-catalog.zh.md#deepseek-aidsh-experimental-tool-follow-up-task)拥有准确的说明、参数文本、结果文本与拒绝文本。模型收到只带一个 `taskId` 参数的 `dismiss_follow_up_task`；委派 subagent 的步骤准入会将其完全排除在声明之外。说明告诉它在本 Session 中撤回此前提出、已不再需要的建议，例如工作已在此处完成或更好的建议取代了它，并说明用户已经启动的 Session 不受影响。成功结果说明任务已撤回；拒绝信息会说明缺少调用 Agent，或本 Session 从未建议过的 `taskId`。
 
 #### Token 影响
 
-挂载期间，schema 为每次请求带来固定成本。每次调用将一个 `taskId` 参数与一条有界结果或拒绝信息追加到普通工具历史。
+步骤接纳该工具期间，schema 为每次请求带来固定成本。每次调用将一个 `taskId` 参数与一条有界结果或拒绝信息追加到普通工具历史。
 
 #### KV Cache 影响
 
@@ -152,7 +152,7 @@ Before your final response, if you noticed worthwhile work outside this request,
 - **用户忽略仅限浏览器本地**——用户的 Dismiss 只存储在该浏览器中；另一个浏览器仍会显示卡片。智能体可通过 `dismiss_follow_up_task` 为所有客户端撤回它。
 - **PTC 撤回竞态**——在同一个 `run_code` 程序中，紧跟在 suggest 之后的 dismiss 可能因未知而被拒绝，因为 PTC 只有在子调用完成后才追加 `tool/ptc-dispatch`；在后续步骤中撤回会成功。
 - **相同 Workspace 与检出目录**——工作树隔离已延期：任务在源 Session 的 Workspace 中启动并复用其检出目录，用户无法选择目录。
-- **仅限顶层 Agent**——委派的 subagent 不能建议或撤回任务；它必须向父 Agent 报告该后续工作。
+- **仅限顶层 Agent**——委派的 subagent 既不会收到这两个工具，也不会收到计时提示段；它必须向父 Agent 报告该后续工作。
 - **不随 dsh 提供**——该 bundle 不是官方可选 bundle，因此安装不携带它，在 profile 安装本包之前 Plugin Manager 也不为它提供开关。只有 `OPTIONAL_BUNDLES` 列出的实验包才能成为安装的依赖（[理由](../../../.agents/notes/implemented/process/2026-09-15-shipped-optional-bundles.zh.md)），而收录需要经过批准的官方图标。
 
 <a id="dev-note"></a>

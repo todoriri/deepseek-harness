@@ -92,29 +92,48 @@ export async function harness(options: HarnessOptions = {}): Promise<Bench> {
   return { ctx, session, agent, fiber }
 }
 
+/** Model selection the step admission resolves against in these specs. */
+export const TEST_MODEL_SELECTION = { provider: 'test', model: 'test' } as const
+
 /**
- * Execute one tool call through the runtime.
+ * Resolve one Agent's step admission through the real `ctx.tools.resolve` path.
+ * @param bench - booted Host bench.
+ * @param agent - the Agent preparing the step.
+ * @returns the tool names that Agent's step may call.
+ */
+export async function admittedTools(bench: Bench, agent: Agent = bench.agent): Promise<ReadonlySet<string>> {
+  const toolSet = await bench.ctx.tools.resolve({ agent, modelSelection: TEST_MODEL_SELECTION, signal: new AbortController().signal })
+  try {
+    return new Set(toolSet.view(agent).keys())
+  } finally {
+    toolSet.dispose()
+  }
+}
+
+/**
+ * Execute one tool call through the step admission and the runtime.
  * @param bench - booted Host bench.
  * @param name - registered tool name.
  * @param callId - call identity used for the per-turn position and the result.
  * @param args - model-supplied arguments.
- * @param agent - calling Agent; `null` dispatches without one.
+ * @param agent - calling Agent; `null` dispatches without one and without a tool set.
  * @returns the normalized execution result.
  */
-export function executeCall(
+export async function executeCall(
   bench: Bench,
   name: string,
   callId: ToolCallId,
   args: Record<string, unknown>,
   agent: Agent | null = bench.agent,
 ): Promise<ToolExecutionResult> {
-  return executeToolFixture(bench.ctx, {
-    callId,
-    name,
-    arguments: args,
-    signal: new AbortController().signal,
-    ...agent === null ? {} : { agent },
-  })
+  const signal = new AbortController().signal
+  if (agent === null) return executeToolFixture(bench.ctx, { callId, name, arguments: args, signal })
+  const toolSet = await bench.ctx.tools.resolve({ agent, modelSelection: TEST_MODEL_SELECTION, signal })
+  try {
+    return await executeToolFixture(bench.ctx, { callId, name, arguments: args, signal, agent, toolSet })
+  } finally {
+    toolSet.dispose()
+  }
 }
 
 /** The registered suggest-tool name, re-exported for the specs. */

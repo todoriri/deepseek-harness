@@ -8,7 +8,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { defineTool } from '@deepseek-ai/dsh-tools'
+import { defineTool, type ToolActivationContext } from '@deepseek-ai/dsh-tools'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { delegationDepthOf } from '@deepseek-ai/dsh-subagent'
@@ -56,14 +56,22 @@ const TASK_ID_DESCRIPTION = 'The taskId returned by suggest_follow_up_task.'
 /** Refusal when the call has no owning Agent. */
 const AGENTLESS_REFUSAL = 'suggest_follow_up_task requires a calling agent.'
 
-/** Refusal when a delegated subagent calls the tool. */
-const SUBAGENT_REFUSAL = 'Only the top-level agent can suggest follow-up tasks; report this follow-up to your parent agent instead.'
-
 /** Refusal when the dismiss call has no owning Agent. */
 const DISMISS_AGENTLESS_REFUSAL = 'dismiss_follow_up_task requires a calling agent.'
 
-/** Refusal when a delegated subagent calls the dismiss tool. */
-const DISMISS_SUBAGENT_REFUSAL = 'Only the top-level agent can dismiss follow-up tasks.'
+/**
+ * Decide whether a step of `agent` may call either follow-up task tool. A
+ * delegated subagent never sees the declarations, so it cannot waste a call on
+ * a refusal; the prompt section follows the same admitted tool set.
+ * @param context - preparing Agent, captured model selection, and cancellation.
+ * @returns whether the preparing Agent is the top-level Agent.
+ */
+function admitsTopLevelAgent({ agent }: ToolActivationContext): boolean {
+  return delegationDepthOf(agent) === 0
+}
+
+/** Registration options shared by both tools: top-level Agents only. */
+const TOP_LEVEL_ONLY = { when: admitsTopLevelAgent }
 
 /**
  * Refusal text for one empty task field.
@@ -94,8 +102,9 @@ function unknownTaskRefusal(taskId: string): string {
 
 /**
  * Register the follow-up task tools, their prompt section, and the
- * `followUpTasks` projection in the mounting scope. The section renders only
- * in a scope where the suggest tool is visible.
+ * `followUpTasks` projection in the mounting scope. Both tools are admitted
+ * only to a top-level Agent; the section renders only where the step's tool set
+ * admits the suggest tool.
  * @param ctx - tool, system-prompt, and session-projection registry scope.
  * @param config - deployment's per-turn suggestion limit.
  */
@@ -104,7 +113,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   ctx.systemPrompt.section({
     name: 'tool:follow-up-task',
     order: ctx.systemPrompt.getSectionOrder('TOOL_FOLLOW_UP_TASK'),
-    text: ({ scope }) => ctx.tools.get(SUGGEST_TOOL_NAME, scope) === undefined ? '' : PROMPT_SECTION,
+    text: ({ scope, toolSet }) => ctx.tools.get(SUGGEST_TOOL_NAME, scope, toolSet) === undefined ? '' : PROMPT_SECTION,
   })
   ctx.tools.register(defineTool({
     name: SUGGEST_TOOL_NAME,
@@ -140,7 +149,6 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     execute(args, exec) {
       const agent = exec.agent
       if (agent === undefined) throw new Error(AGENTLESS_REFUSAL)
-      if (delegationDepthOf(agent) > 0) throw new Error(SUBAGENT_REFUSAL)
       const title = args.title.trim()
       if (title.length === 0) throw new Error(emptyFieldRefusal('title'))
       const summary = args.summary.trim()
@@ -155,7 +163,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       }
       return Promise.resolve({ taskId: exec.callId, sessionId: SessionId(`session-${randomUUID()}`) })
     },
-  }))
+  }), TOP_LEVEL_ONLY)
   ctx.tools.register(defineTool({
     name: 'dismiss_follow_up_task',
     description: DISMISS_DESCRIPTION,
@@ -183,10 +191,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     execute(args, exec) {
       const agent = exec.agent
       if (agent === undefined) throw new Error(DISMISS_AGENTLESS_REFUSAL)
-      if (delegationDepthOf(agent) > 0) throw new Error(DISMISS_SUBAGENT_REFUSAL)
       const state = projection.stateOf(agent.session)
       if (!state.suggested.includes(args.taskId)) throw new Error(unknownTaskRefusal(args.taskId))
       return Promise.resolve({ taskId: args.taskId })
     },
-  }))
+  }), TOP_LEVEL_ONLY)
 }

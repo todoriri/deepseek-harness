@@ -1,14 +1,15 @@
 /**
  * `suggest_follow_up_task` behavior: registration shape, reserved session
  * identities, trimmed presentation metadata, and the refusal order (no agent,
- * subagent, empty field, per-turn cap).
+ * empty field, per-turn cap). Step admission keeps the tool out of a delegated
+ * subagent's declarations entirely.
  */
 
 import { describe, expect, it } from 'vitest'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
-import type { ToolExecutionResult } from '@deepseek-ai/dsh-tools'
+import type { ToolExecutionResult, ToolExecutionToken, ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { Config } from '../src/index.ts'
-import { executeCall, harness, SUGGEST_TOOL_NAME } from './harness.ts'
+import { admittedTools, executeCall, harness, SUGGEST_TOOL_NAME } from './harness.ts'
 import type { Bench } from './harness.ts'
 
 const DESCRIPTION = 'Offer the user a follow-up task that they can start later as a new session. Use it for worthwhile work you notice outside the current request, such as a bug found in passing, missing test coverage, stale documentation, or a confirmed TODO, instead of doing that work now. Do not use it for work the current request needs, for small fixes you can finish now, or for speculative ideas. Nothing runs unless the user starts the task; the user sees `title` and `summary` and reviews `prompt` before sending it. The new session cannot see this conversation, so `prompt` must stand alone: state the goal, the relevant file paths, what you observed, and how to verify the result.'
@@ -20,8 +21,6 @@ const SUMMARY_DESCRIPTION = 'One or two plain-text sentences for the user, witho
 const PROMPT_DESCRIPTION = 'Complete instructions for the agent in the new session, which cannot see this conversation.'
 
 const AGENTLESS_REFUSAL = 'suggest_follow_up_task requires a calling agent.'
-
-const SUBAGENT_REFUSAL = 'Only the top-level agent can suggest follow-up tasks; report this follow-up to your parent agent instead.'
 
 
 const ARGS = {
@@ -114,16 +113,30 @@ describe('suggest_follow_up_task', () => {
     })
   })
 
-  it('refuses a call without an agent', async () => {
+  it('refuses a direct execution without a calling Agent', async () => {
     const bench = await harness()
-    const result = await executeCall(bench, SUGGEST_TOOL_NAME, ToolCallId('call-1'), ARGS, null)
-    expect(refusalOf(result)).toBe(AGENTLESS_REFUSAL)
+    const definition = bench.ctx.tools.get(SUGGEST_TOOL_NAME, bench.agent)
+    if (definition === undefined) throw new Error('suggest_follow_up_task is not registered')
+    const exec: ToolRunContext = {
+      callId: ToolCallId('direct-suggest'), rootCallId: ToolCallId('direct-suggest'), name: SUGGEST_TOOL_NAME,
+      arguments: ARGS, token: Symbol('direct-suggest') as ToolExecutionToken, signal: new AbortController().signal,
+      deferContext() {}, concludeTurn() {},
+    }
+    await expect(definition.execute(ARGS, exec)).rejects.toThrow(AGENTLESS_REFUSAL)
   })
 
-  it('refuses a subagent caller', async () => {
+  it('admits a top-level Agent and hides the tool from a delegated subagent', async () => {
+    const top = await harness()
+    expect((await admittedTools(top)).has(SUGGEST_TOOL_NAME)).toBe(true)
+    const child = await harness({ agentOptions: { subagentDepth: 1 } })
+    expect((await admittedTools(child)).has(SUGGEST_TOOL_NAME)).toBe(false)
+  })
+
+  it('rejects a delegated subagent call as an unknown tool', async () => {
     const bench = await harness({ agentOptions: { subagentDepth: 1 } })
     const result = await executeCall(bench, SUGGEST_TOOL_NAME, ToolCallId('call-1'), ARGS)
-    expect(refusalOf(result)).toBe(SUBAGENT_REFUSAL)
+    expect(result.isError).toBe(true)
+    expect(result.content).toEqual([{ type: 'text', text: 'Error: unknown tool "suggest_follow_up_task"' }])
   })
 
   it.each(['title', 'summary', 'prompt'] as const)('refuses %s when it is only whitespace', async (field) => {

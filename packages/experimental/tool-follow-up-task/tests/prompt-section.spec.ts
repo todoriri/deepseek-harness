@@ -1,12 +1,12 @@
 /**
- * The timing prompt section follows the suggest tool: it renders where the tool
- * is visible, at its allocated order, and leaves with the plugin fiber.
+ * The timing prompt section follows the suggest tool: it renders where the step
+ * admits the tool, at its allocated order, and leaves with the plugin fiber.
  */
 
 import { describe, expect, it } from 'vitest'
 import { renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
-import { SUGGEST_TOOL_NAME, harness } from './harness.ts'
+import { SUGGEST_TOOL_NAME, TEST_MODEL_SELECTION, harness } from './harness.ts'
 import type { Bench } from './harness.ts'
 
 const SECTION_NAME = 'tool:follow-up-task'
@@ -28,6 +28,36 @@ describe('follow-up task prompt section', () => {
     const names = (await systemPrompt.assemble({ scope: bench.agent })).sections.map(section => section.name)
     expect(names.slice(names.indexOf('probe:before'))).toEqual(['probe:before', SECTION_NAME, 'probe:after', ...names.slice(names.indexOf('probe:after') + 1)])
     expect(renderPrompt(await systemPrompt.assemble({ scope: bench.agent }))).toContain(`BEFORE\n\n${SECTION_TEXT}\n\nAFTER`)
+  })
+
+  it('renders the section when a top-level step admits the suggest tool', async () => {
+    const bench = await assemblyBench()
+    const toolSet = await bench.ctx.tools.resolve({
+      agent: bench.agent, modelSelection: TEST_MODEL_SELECTION, signal: new AbortController().signal,
+    })
+    try {
+      const assembly = await bench.ctx.systemPrompt.assemble({ scope: bench.agent, agent: bench.agent, toolSet })
+      expect(renderPrompt(assembly)).toContain(SECTION_TEXT)
+    } finally {
+      toolSet.dispose()
+    }
+  })
+
+  it('renders nothing when a subagent step does not admit the suggest tool', async () => {
+    const bench = await harness({ agentOptions: { subagentDepth: 1 } })
+    await bench.ctx.plugin(NativeToolExecutor)
+    const toolSet = await bench.ctx.tools.resolve({
+      agent: bench.agent, modelSelection: TEST_MODEL_SELECTION, signal: new AbortController().signal,
+    })
+    try {
+      // The tool is still registered globally, so registry visibility alone would
+      // render the section; the step admission is what keeps it out of the child.
+      expect(bench.ctx.tools.get(SUGGEST_TOOL_NAME, bench.agent)).toBeDefined()
+      const assembly = await bench.ctx.systemPrompt.assemble({ scope: bench.agent, agent: bench.agent, toolSet })
+      expect(renderPrompt(assembly)).not.toContain(SECTION_TEXT)
+    } finally {
+      toolSet.dispose()
+    }
   })
 
   it('renders nothing in a scope where the suggest tool is hidden', async () => {
