@@ -61,7 +61,7 @@ CLI 将该目录记录为 `link:` 依赖，并把该 bundle 追加到 `dsh.profi
 <details>
 <summary>实现细节——点击展开</summary>
 
-[`src/index.ts`](src/index.ts) 在挂载作用域中注册两个工具与 `followUpTasks` Session projection；[`src/projection.ts`](src/projection.ts) 折叠该 projection，[`src/contract.ts`](src/contract.ts) 定义 Web 客户端会重新校验的展示 metadata。[`cordis.patch.yml`](cordis.patch.yml) 插入 `tool-follow-up-task` 行与 `client-ui-follow-up-task` 行。
+[`src/index.ts`](src/index.ts) 在挂载作用域中注册两个工具、其时机提示段与 `followUpTasks` Session projection；[`src/projection.ts`](src/projection.ts) 折叠该 projection，[`src/contract.ts`](src/contract.ts) 定义 Web 客户端会重新校验的展示 metadata。[`cordis.patch.yml`](cordis.patch.yml) 插入 `tool-follow-up-task` 行与 `client-ui-follow-up-task` 行。
 
 成功调用写入 `output.presentationMeta`：建议 metadata 携带 `taskId`、保留的 `sessionId`，以及去掉首尾空白的 `title`、`summary` 与 `prompt`；撤回 metadata 携带 `taskId`。core 将其持久化为原生调用的 `tool/result.meta` 或 PTC 子调用的 `tool/ptc-dispatch.meta`。只有成功调用写入 metadata，因此被拒绝的调用永远不会产生卡片。
 
@@ -69,12 +69,12 @@ projection 保存 `openTurnCalls`（当前打开回合内 suggest 调用的 call
 
 上限从 `openTurnCalls` 读取调用位置：调用索引加一，id 不存在时为列表长度加一；位置超过 `maxSuggestionsPerTurn` 时拒绝。因此同一步骤中的并行调用具有确定的顺序，被拒绝的调用仍占用一个位置。没有调用 Agent、或 Agent 是委派 subagent 的调用会在上限检查之前被拒绝。
 
-每次成功建议都会生成 `session-${randomUUID()}` 作为保留的 Session 身份；该值返回给模型并存入 metadata。销毁插件会移除工具注册与 projection 注册。
+每次成功建议都会生成 `session-${randomUUID()}` 作为保留的 Session 身份；该值返回给模型并存入 metadata。销毁插件会移除工具注册、提示段与 projection 注册。
 
 | 文件 | 职责 |
 |---|---|
 | [`cordis.patch.yml`](cordis.patch.yml) | 插入 Host 工具行与 Web 卡片行 |
-| [`src/index.ts`](src/index.ts) | 注册工具、拒绝、上限与 projection |
+| [`src/index.ts`](src/index.ts) | 注册工具、提示段、拒绝、上限与 projection |
 | [`src/projection.ts`](src/projection.ts) | 仅限 Host 的 `followUpTasks` 折叠 |
 | [`src/contract.ts`](src/contract.ts) | 与 Web 客户端共享的展示 metadata 类型 |
 
@@ -95,6 +95,26 @@ projection 保存 `openTurnCalls`（当前打开回合内 suggest 调用的 call
 
 <a id="model-experience"></a>
 ## 模型体验
+
+### 时机提示段
+
+#### 模型看到什么
+
+当 `suggest_follow_up_task` 在当前组装作用域中可见时，系统提示词在 `TOOL_FOLLOW_UP_TASK` 位置携带一句话。这句话说明何时调用该工具；哪些工作符合条件、哪些不符合由工具描述说明。隐藏该工具的作用域（例如拒绝该工具的 preset）不渲染此段。
+
+##### 时机指引
+
+```markdown
+Before your final response, if you noticed worthwhile work outside this request, offer it with suggest_follow_up_task instead of only listing it in your reply.
+```
+
+#### Token 影响
+
+工具可见时，每个请求都携带这一句固定文字。把该组合包以 patch 挂入 headless profile 后，同一个固定首轮在本地 llama.cpp 分词器上测得加入此段前为 6,001 个提示 token，加入后为 6,028 个；该数字已计入此次从建议工具描述中删去的四个词。
+
+#### KV Cache 影响
+
+插件保持挂载且工具可见性不变时，前缀保持稳定。挂载、卸载或隐藏该工具会使渲染出的系统提示词变化一次，与任何提示段变化相同。
 
 ### 建议工具
 

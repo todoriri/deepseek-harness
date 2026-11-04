@@ -11,7 +11,7 @@ import { Config } from '../src/index.ts'
 import { executeCall, harness, SUGGEST_TOOL_NAME } from './harness.ts'
 import type { Bench } from './harness.ts'
 
-const DESCRIPTION = 'Offer the user a follow-up task that they can start later as a new session. Use it for worthwhile work you notice outside the current request, such as a bug found in passing, missing test coverage, stale documentation, or a confirmed TODO, instead of doing that work now or only mentioning it. Do not use it for work the current request needs, for small fixes you can finish now, or for speculative ideas. Nothing runs unless the user starts the task; the user sees `title` and `summary` and reviews `prompt` before sending it. The new session cannot see this conversation, so `prompt` must stand alone: state the goal, the relevant file paths, what you observed, and how to verify the result.'
+const DESCRIPTION = 'Offer the user a follow-up task that they can start later as a new session. Use it for worthwhile work you notice outside the current request, such as a bug found in passing, missing test coverage, stale documentation, or a confirmed TODO, instead of doing that work now. Do not use it for work the current request needs, for small fixes you can finish now, or for speculative ideas. Nothing runs unless the user starts the task; the user sees `title` and `summary` and reviews `prompt` before sending it. The new session cannot see this conversation, so `prompt` must stand alone: state the goal, the relevant file paths, what you observed, and how to verify the result.'
 
 const TITLE_DESCRIPTION = 'Imperative label of at most about 60 characters, such as "Fix the stale config example in README".'
 

@@ -103,7 +103,7 @@ definition 将建议的 metadata 折叠为隐藏的回合尾部节点，并在�
 
 #### Token 影响
 
-零。卡片、工具行与忽略记录不增加模型 token；Host [工具包](../tool-follow-up-task/README.zh.md)拥有所有模型可见的 schema、说明、结果与拒绝信息。
+零。卡片、工具行与忽略记录不增加模型 token；Host [工具包](../tool-follow-up-task/README.zh.md)拥有所有模型可见的提示段、schema、说明、结果与拒绝信息。
 
 #### KV Cache 影响
 

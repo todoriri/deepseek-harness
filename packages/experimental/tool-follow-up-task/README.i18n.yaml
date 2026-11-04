@@ -18,14 +18,29 @@
   en: 822ce246840b85c0
   zh: 6b9f805919fa8b34
 /deepseek-ai-dsh-experimental-tool-follow-up-task/understand-the-implementation:
-  en: 486a1dd67f5f2df4
-  zh: 335de847e2d335dd
+  en: 220d915b6b962651
+  zh: 5515c945982bf4d8
 /deepseek-ai-dsh-experimental-tool-follow-up-task/further-exploration:
   en: 7f8ed180ef2e6308
   zh: 716bbad7a2e31918
 /deepseek-ai-dsh-experimental-tool-follow-up-task/model-experience:
   en: 215e7ba838619b7b
   zh: a311da3843709f90
+/deepseek-ai-dsh-experimental-tool-follow-up-task/model-experience/timing-section:
+  en: 057ca9b2e0b61e68
+  zh: a9e33b1dd9c3f353
+/deepseek-ai-dsh-experimental-tool-follow-up-task/model-experience/timing-section/what-the-model-sees:
+  en: 8d75a9131ab95714
+  zh: 50134dfa22e40507
+/deepseek-ai-dsh-experimental-tool-follow-up-task/model-experience/timing-section/what-the-model-sees/timing-guidance:
+  en: 9d1b208ca6bc79d0
+  zh: 5a81de4bc58a9a1a
+/deepseek-ai-dsh-experimental-tool-follow-up-task/model-experience/timing-section/token-effect:
+  en: 53796db068651994
+  zh: 48d110fd076eab56
+/deepseek-ai-dsh-experimental-tool-follow-up-task/model-experience/timing-section/kv-cache-effect:
+  en: d6bc3dac0f337533
+  zh: a995131a30357535
 /deepseek-ai-dsh-experimental-tool-follow-up-task/model-experience/suggest-tool:
   en: 31d53b85650e3511
   zh: af03c9edcffbc1c6

@@ -61,7 +61,7 @@ A successful `suggest_follow_up_task` call returns `taskId` (the call's own id) 
 <details>
 <summary>Implementation internals — click to expand</summary>
 
-[`src/index.ts`](src/index.ts) registers both tools and the `followUpTasks` Session projection in the mounting scope; [`src/projection.ts`](src/projection.ts) folds the projection, and [`src/contract.ts`](src/contract.ts) defines the presentation metadata that the Web client re-validates. [`cordis.patch.yml`](cordis.patch.yml) inserts the `tool-follow-up-task` row and the `client-ui-follow-up-task` row.
+[`src/index.ts`](src/index.ts) registers both tools, their timing prompt section, and the `followUpTasks` Session projection in the mounting scope; [`src/projection.ts`](src/projection.ts) folds the projection, and [`src/contract.ts`](src/contract.ts) defines the presentation metadata that the Web client re-validates. [`cordis.patch.yml`](cordis.patch.yml) inserts the `tool-follow-up-task` row and the `client-ui-follow-up-task` row.
 
 A successful call writes `output.presentationMeta`: suggested metadata carries `taskId`, the reserved `sessionId`, and the trimmed `title`, `summary`, and `prompt`; dismissal metadata carries `taskId`. The core persists it as `tool/result.meta` for a native call and `tool/ptc-dispatch.meta` for a PTC sub-call. Only successful calls write metadata, so refused calls never produce a card.
 
@@ -69,12 +69,12 @@ The projection holds `openTurnCalls` (call ids of suggest calls in the open turn
 
 The cap reads the call's position from `openTurnCalls`: the call's index plus one, or the list length plus one when the id is absent, and refuses a position above `maxSuggestionsPerTurn`. Parallel calls in one step therefore have a deterministic order, and refused calls still occupy a slot. A call with no calling Agent, or with a delegated subagent as its Agent, is refused before the cap check.
 
-Every successful suggestion mints `session-${randomUUID()}` as the reserved Session identity; the value is returned to the model and stored in metadata. Disposing the plugin removes the tool registrations and the projection registration.
+Every successful suggestion mints `session-${randomUUID()}` as the reserved Session identity; the value is returned to the model and stored in metadata. Disposing the plugin removes the tool registrations, the prompt section, and the projection registration.
 
 | File | Role |
 |---|---|
 | [`cordis.patch.yml`](cordis.patch.yml) | Inserts the Host tools row and the Web cards row |
-| [`src/index.ts`](src/index.ts) | Registers the tools, refusals, cap, and projection |
+| [`src/index.ts`](src/index.ts) | Registers the tools, prompt section, refusals, cap, and projection |
 | [`src/projection.ts`](src/projection.ts) | The host-only `followUpTasks` fold |
 | [`src/contract.ts`](src/contract.ts) | Presentation metadata types shared with the Web client |
 
@@ -95,6 +95,26 @@ Every successful suggestion mints `session-${randomUUID()}` as the reserved Sess
 
 <a id="model-experience"></a>
 ## Model Experience
+
+### Timing section
+
+#### What the model sees
+
+While `suggest_follow_up_task` is visible in the assembling scope, the system prompt carries one sentence at the `TOOL_FOLLOW_UP_TASK` order. The sentence states when to call the tool; the tool description states what qualifies and what does not. A scope that hides the tool, such as a preset that denies it, renders no section.
+
+##### Timing guidance
+
+```markdown
+Before your final response, if you noticed worthwhile work outside this request, offer it with suggest_follow_up_task instead of only listing it in your reply.
+```
+
+#### Token effect
+
+One fixed sentence is present on each request while the tool is visible. With the bundle patched into the headless profile, a fixed first turn measured 6,001 prompt tokens before the section and 6,028 after it on a local llama.cpp tokenizer; the figure includes the four words the change removed from the suggest description.
+
+#### KV Cache effect
+
+Prefix-stable while the plugin is mounted and the tool's visibility is unchanged. Mounting, unmounting, or hiding the tool changes the rendered system prompt once, as every prompt-section change does.
 
 ### Suggest tool
 

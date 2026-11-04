@@ -103,7 +103,7 @@ Nothing. The package renders the logged `tool/result` and `tool/ptc-dispatch` re
 
 #### Token effect
 
-Zero. Cards, rows, and dismissals add no model tokens; the Host [tool package](../tool-follow-up-task/README.md) owns every model-visible schema, description, result, and refusal.
+Zero. Cards, rows, and dismissals add no model tokens; the Host [tool package](../tool-follow-up-task/README.md) owns every model-visible prompt section, schema, description, result, and refusal.
 
 #### KV Cache effect
 

@@ -14,6 +14,8 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import { delegationDepthOf } from '@deepseek-ai/dsh-subagent'
 // Type-only: resolves the required ctx.sessionProjections service declaration.
 import type {} from '@deepseek-ai/dsh-session-projection'
+// Type-only: resolves the required ctx.systemPrompt service declaration.
+import type {} from '@deepseek-ai/dsh-system-prompt'
 import { followUpTasksProjection, SUGGEST_TOOL_NAME } from './projection.ts'
 import type { FollowUpTaskDismissedMeta, FollowUpTaskSuggestedMeta } from './contract.ts'
 
@@ -22,7 +24,7 @@ export type * from './contract.ts'
 /** Cordis plugin name. */
 export const name = 'tool-follow-up-task'
 /** Services required to register the follow-up task tools. */
-export const inject = ['tools', 'sessionProjections']
+export const inject = ['tools', 'sessionProjections', 'systemPrompt']
 
 /** Deployment configuration of the follow-up task tools. */
 export interface Config {
@@ -36,7 +38,10 @@ export const Config: z<Config> = z.object({
     .description('Most suggest_follow_up_task calls one turn may make; later calls in that turn fail.'),
 })
 
-const DESCRIPTION = 'Offer the user a follow-up task that they can start later as a new session. Use it for worthwhile work you notice outside the current request, such as a bug found in passing, missing test coverage, stale documentation, or a confirmed TODO, instead of doing that work now or only mentioning it. Do not use it for work the current request needs, for small fixes you can finish now, or for speculative ideas. Nothing runs unless the user starts the task; the user sees `title` and `summary` and reviews `prompt` before sending it. The new session cannot see this conversation, so `prompt` must stand alone: state the goal, the relevant file paths, what you observed, and how to verify the result.'
+const DESCRIPTION = 'Offer the user a follow-up task that they can start later as a new session. Use it for worthwhile work you notice outside the current request, such as a bug found in passing, missing test coverage, stale documentation, or a confirmed TODO, instead of doing that work now. Do not use it for work the current request needs, for small fixes you can finish now, or for speculative ideas. Nothing runs unless the user starts the task; the user sees `title` and `summary` and reviews `prompt` before sending it. The new session cannot see this conversation, so `prompt` must stand alone: state the goal, the relevant file paths, what you observed, and how to verify the result.'
+
+/** Prompt section text: when to offer suggestions; the tool description owns what qualifies. */
+const PROMPT_SECTION = 'Before your final response, if you noticed worthwhile work outside this request, offer it with suggest_follow_up_task instead of only listing it in your reply.'
 
 const TITLE_DESCRIPTION = 'Imperative label of at most about 60 characters, such as "Fix the stale config example in README".'
 
@@ -88,13 +93,19 @@ function unknownTaskRefusal(taskId: string): string {
 }
 
 /**
- * Register the follow-up task tools and the `followUpTasks` projection in the
- * mounting scope.
- * @param ctx - tool and session-projection registry scope.
+ * Register the follow-up task tools, their prompt section, and the
+ * `followUpTasks` projection in the mounting scope. The section renders only
+ * in a scope where the suggest tool is visible.
+ * @param ctx - tool, system-prompt, and session-projection registry scope.
  * @param config - deployment's per-turn suggestion limit.
  */
 export async function apply(ctx: Context, config: Config): Promise<void> {
   const projection = await ctx.sessionProjections.register(followUpTasksProjection)
+  ctx.systemPrompt.section({
+    name: 'tool:follow-up-task',
+    order: ctx.systemPrompt.getSectionOrder('TOOL_FOLLOW_UP_TASK'),
+    text: ({ scope }) => ctx.tools.get(SUGGEST_TOOL_NAME, scope) === undefined ? '' : PROMPT_SECTION,
+  })
   ctx.tools.register(defineTool({
     name: SUGGEST_TOOL_NAME,
     description: DESCRIPTION,
