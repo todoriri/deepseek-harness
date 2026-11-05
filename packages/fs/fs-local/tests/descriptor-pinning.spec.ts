@@ -1,13 +1,13 @@
 /**
  * Tests for the local backend's OPT-IN descriptor pinning (`verifyOpens`): the
  * read opens first and verifies the descriptor's identity against the resolved
- * target before any byte is returned; the mutation pins the destination
- * directory by descriptor and stages/publishes through it. The swap is performed
- * deterministically — resolve first, then replace an ancestor with a symlink —
- * so these cases measure exactly the window the fence used to lose, not a
- * probabilistic race. The bare `LocalFileSystem` stays path-based: the flag
- * defaults to false and only a backend whose containment check is a
- * resolve-then-open window turns it on.
+ * target before any byte is returned; every mutation pins its target directory
+ * by descriptor (a move pins both ends) and reads, stages, publishes or unlinks
+ * through it. The swap is performed deterministically — resolve first, then
+ * replace a directory or file with a symlink — so these cases measure exactly
+ * the window the fence used to lose, not a probabilistic race. The bare
+ * `LocalFileSystem` stays path-based: the flag defaults to false and only a
+ * backend whose containment check is a resolve-then-open window turns it on.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -16,7 +16,15 @@ import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from 'node:f
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
+import { parsePatch } from '@deepseek-ai/dsh-fs-patch'
 import { LocalFileSystem, FD_PINNING_AVAILABLE } from '@deepseek-ai/dsh-fs-local'
+
+/** One update hunk replacing `old` with `new` at the file's first line. */
+function hunks(old = 'old', replacement = 'new') {
+  const [operation] = parsePatch(`*** Begin Patch\n*** Update File: a\n@@\n-${old}\n+${replacement}\n*** End Patch`)
+  if (operation?.kind !== 'update') throw new Error('Expected update')
+  return operation.hunks
+}
 
 /** The bare backend plus the opt-in the sandboxing subclass turns on. */
 class VerifyingFileSystem extends LocalFileSystem {
@@ -174,5 +182,131 @@ describe.runIf(FD_PINNING_AVAILABLE)('dir-fd-pinned writes', () => {
     await expect(fs.editText(target, { oldString: 'DECOY', newString: 'x', replaceAll: false }))
       .rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
     expect(await readFile(join(outside, 'target.txt'), 'utf8')).toBe('SECRET\n')
+  })
+})
+
+describe.runIf(FD_PINNING_AVAILABLE)('dir-fd-pinned patches and deletions', () => {
+  it('patches through the pinned destination on a stable path', async () => {
+    const path = join(dir, 'patch.txt')
+    await writeFile(path, 'old\ntail\n')
+    const outcome = await fs.patchText(await fs.resolve(path), hunks())
+    expect(outcome).toMatchObject({ before: 'old\ntail\n', after: 'new\ntail\n' })
+    expect(await readFile(path, 'utf8')).toBe('new\ntail\n')
+  })
+
+  it('refuses a patch whose file became a symlink to an outside file after resolution', async () => {
+    const path = join(dir, 'patch.txt')
+    await writeFile(path, 'DECOY\n')
+    await writeFile(join(outside, 'p.txt'), 'SECRET\n')
+    const target = await fs.resolve(path)
+    // The preflight still sees a file (metadata is deliberately unfenced); the
+    // before-content read is the content read, and it must not come from the swap.
+    await rm(path)
+    await symlink(join(outside, 'p.txt'), path)
+    await expect(fs.patchText(target, hunks('DECOY'))).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    expect(await readFile(join(outside, 'p.txt'), 'utf8')).toBe('SECRET\n')
+  })
+
+  it('refuses a patch whose destination directory became a symlink after resolution, landing nothing outside', async () => {
+    await mkdir(join(dir, 'd'))
+    await writeFile(join(dir, 'd', 'f'), 'old\n')
+    await writeFile(join(outside, 'f'), 'SECRET\n')
+    const target = await fs.resolve(join(dir, 'd', 'f'))
+    await rename(join(dir, 'd'), join(dir, 'd-real'))
+    await symlink(outside, join(dir, 'd'))
+    await expect(fs.patchText(target, hunks())).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    expect(await readFile(join(dir, 'd-real', 'f'), 'utf8')).toBe('old\n')
+    expect(await readFile(join(outside, 'f'), 'utf8')).toBe('SECRET\n')
+  })
+
+  it('deletes through the pinned directory on a stable path', async () => {
+    const path = join(dir, 'del.txt')
+    await writeFile(path, 'gone\n')
+    expect(await fs.deleteFile(await fs.resolve(path))).toEqual({ before: 'gone\n' })
+    expect(existsSync(path)).toBe(false)
+  })
+
+  it('refuses a delete whose file became a symlink to an outside file after resolution', async () => {
+    const path = join(dir, 'del.txt')
+    await writeFile(path, 'DECOY\n')
+    await writeFile(join(outside, 'keep.txt'), 'SECRET\n')
+    const target = await fs.resolve(path)
+    await rm(path)
+    await symlink(join(outside, 'keep.txt'), path)
+    await expect(fs.deleteFile(target)).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    expect(await readFile(join(outside, 'keep.txt'), 'utf8')).toBe('SECRET\n')
+  })
+
+  it('refuses a delete whose directory became a symlink after resolution, removing nothing outside', async () => {
+    await mkdir(join(dir, 'd'))
+    await writeFile(join(dir, 'd', 'f'), 'DECOY\n')
+    await writeFile(join(outside, 'f'), 'SECRET\n')
+    const target = await fs.resolve(join(dir, 'd', 'f'))
+    await rename(join(dir, 'd'), join(dir, 'd-real'))
+    await symlink(outside, join(dir, 'd'))
+    await expect(fs.deleteFile(target)).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    expect(await readFile(join(dir, 'd-real', 'f'), 'utf8')).toBe('DECOY\n')
+    expect(await readFile(join(outside, 'f'), 'utf8')).toBe('SECRET\n')
+  })
+})
+
+describe.runIf(FD_PINNING_AVAILABLE)('dir-fd-pinned moves', () => {
+  it('moves through the pinned source and destination directories on a stable path', async () => {
+    const source = join(dir, 'from.txt')
+    await writeFile(source, 'moving\n')
+    const destination = join(dir, 'to.txt')
+    const outcome = await fs.moveFile(await fs.resolve(source), await fs.resolve(destination), {})
+    expect(outcome).toMatchObject({ sourceDeleted: true, destination: { operation: 'create', before: null, after: 'moving\n' } })
+    expect(await readFile(destination, 'utf8')).toBe('moving\n')
+    expect(existsSync(source)).toBe(false)
+  })
+
+  it('creates missing destination directories through the pinned parent and moves the source', async () => {
+    const source = join(dir, 'from.txt')
+    await writeFile(source, 'nested\n')
+    const destination = join(dir, 'a', 'b', 'to.txt')
+    await fs.moveFile(await fs.resolve(source), await fs.resolve(destination), {})
+    expect(await readFile(destination, 'utf8')).toBe('nested\n')
+    expect(existsSync(source)).toBe(false)
+  })
+
+  it('refuses a move whose source became a symlink to an outside file after resolution', async () => {
+    const source = join(dir, 'src.txt')
+    await writeFile(source, 'DECOY\n')
+    await writeFile(join(outside, 's.txt'), 'SECRET\n')
+    const target = await fs.resolve(source)
+    await rm(source)
+    await symlink(join(outside, 's.txt'), source)
+    const destination = await fs.resolve(join(dir, 'dst.txt'))
+    await expect(fs.moveFile(target, destination, {})).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    expect(existsSync(destination.targetKey)).toBe(false)
+    expect(await readFile(join(outside, 's.txt'), 'utf8')).toBe('SECRET\n')
+  })
+
+  it('refuses a move whose destination directory became a symlink after resolution and leaves the source', async () => {
+    await mkdir(join(dir, 'dest-dir'))
+    const source = join(dir, 'src.txt')
+    await writeFile(source, 'keep\n')
+    const destination = await fs.resolve(join(dir, 'dest-dir', 'dst.txt'))
+    await rename(join(dir, 'dest-dir'), join(dir, 'dest-dir-real'))
+    await symlink(outside, join(dir, 'dest-dir'))
+    await expect(fs.moveFile(await fs.resolve(source), destination, {})).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    expect(await readFile(source, 'utf8')).toBe('keep\n')
+    expect(existsSync(join(dir, 'dest-dir-real', 'dst.txt'))).toBe(false)
+    expect(existsSync(join(outside, 'dst.txt'))).toBe(false)
+  })
+
+  it('refuses a move whose existing destination became a symlink to an outside file after resolution', async () => {
+    const source = join(dir, 'src.txt')
+    await writeFile(source, 'keep\n')
+    const destinationPath = join(dir, 'dst.txt')
+    await writeFile(destinationPath, 'DECOY\n')
+    await writeFile(join(outside, 'd.txt'), 'SECRET\n')
+    const destination = await fs.resolve(destinationPath)
+    await rm(destinationPath)
+    await symlink(join(outside, 'd.txt'), destinationPath)
+    await expect(fs.moveFile(await fs.resolve(source), destination, {})).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    expect(await readFile(source, 'utf8')).toBe('keep\n')
+    expect(await readFile(join(outside, 'd.txt'), 'utf8')).toBe('SECRET\n')
   })
 })

@@ -141,11 +141,14 @@ export class LocalFileSystem extends FileSystem {
    * When on, a read opens the resolved canonical target, verifies that the path the
    * kernel reports for the descriptor IS that canonical path, and serves the bytes
    * from the descriptor — so a symlink swapped into the path after the caller's
-   * resolution fails the open instead of redirecting it. `writeText` and
-   * `editText` pin the destination directory the same way (creating missing
-   * intermediates relative to the pinned parent) and stage, publish and clean up
-   * through the descriptor; `patchText`, `deleteFile` and `moveFile` stay
-   * path-based.
+   * resolution fails the open instead of redirecting it. Every mutation pins its
+   * target directory the same way (creating missing intermediates relative to the
+   * pinned parent): `writeText`, `editText` and `patchText` read their
+   * before-content and stage/publish through the descriptor; `deleteFile` reads
+   * its before-content and unlinks through it; `moveFile` pins BOTH the source and
+   * destination directory, reads the source and destination before-content
+   * through them, stages/publishes the destination through the destination
+   * descriptor, and unlinks the source through the source descriptor.
    * The bare backend keeps its historical check-then-open behaviour; a backend
    * that fences MODEL-CONTROLLED paths (`@deepseek-ai/dsh-fs-sandbox`, whose
    * containment check is exactly a resolve-then-open window) turns it on. It needs
@@ -252,22 +255,24 @@ export class LocalFileSystem extends FileSystem {
     return pinReadTarget(target, signal)
   }
 
-  /** Pin the mutation's destination directory, or `undefined` when descriptor verification is off. */
-  private async pinnedDestination(target: FsTarget, signal?: AbortSignal): Promise<PinnedDirectory | undefined> {
+  /** Pin the target's parent directory, or `undefined` when descriptor verification is off. */
+  private async pinnedParent(target: FsTarget, signal?: AbortSignal): Promise<PinnedDirectory | undefined> {
     if (!this.descriptorVerified) return undefined
     return pinDirectory(dirname(target.targetKey), target.displayPath, signal)
   }
 
-  /** The path a mutation must use: through the pinned descriptor when present, else the resolved target key. */
-  private destinationPath(target: FsTarget, pinned: PinnedDirectory | undefined): string {
+  /** The path a mutation must use for one target: through the pinned descriptor when present, else the resolved target key. */
+  private pinnedChildPath(target: FsTarget, pinned: PinnedDirectory | undefined): string {
     return pinned ? join(pinned.path, basename(target.targetKey)) : target.targetKey
   }
 
   /**
-   * The overwrite diff basis, read through the verified descriptor when pinning is
-   * on. A file deleted after the caller's preflight costs only the optional basis
-   * (the verified helper's `FS_NOT_FOUND` becomes `null`); an identity refusal is
-   * the swap this closes and fails the write.
+   * The before-content basis, read through the verified descriptor when pinning is
+   * on. As on the unpinned path, a file deleted or made unreadable after the
+   * caller's preflight costs only the optional basis (the verified helper's
+   * `FS_NOT_FOUND` or a kernel errno becomes `null`); the mutation still goes
+   * through the pinned directory. An identity refusal is the swap this closes and
+   * fails the operation; cancellation propagates.
    */
   private async readDiffBasis(target: FsTarget, pinned: PinnedDirectory | undefined, signal?: AbortSignal): Promise<string | null> {
     if (!pinned) return readTextForDiff(target.targetKey, this.config.diffBasisMaxBytes, signal)
@@ -275,7 +280,7 @@ export class LocalFileSystem extends FileSystem {
     try {
       handle = await openVerifiedChildFile(pinned, basename(target.targetKey), target.displayPath, 'read', signal)
     } catch (error: unknown) {
-      if (error instanceof FsError && error.code === 'FS_NOT_FOUND') return null
+      if (error instanceof FsError ? error.code === 'FS_NOT_FOUND' : error instanceof Error && 'code' in error) return null
       throw error
     }
     try {
@@ -285,7 +290,7 @@ export class LocalFileSystem extends FileSystem {
     }
   }
 
-  /** Read a file for editing through the verified descriptor when pinning is on. */
+  /** Read a file's LF-normalized content through the verified descriptor when pinning is on. */
   private async readTargetForEdit(target: FsTarget, pinned: PinnedDirectory | undefined, signal?: AbortSignal) {
     if (!pinned) return readForEdit(target.targetKey, target.displayPath, signal)
     const handle = await openVerifiedChildFile(pinned, basename(target.targetKey), target.displayPath, 'edit', signal)
@@ -381,8 +386,8 @@ export class LocalFileSystem extends FileSystem {
       // `before: null`; consumers retain their whole-file fallback.
       const diffable = existing !== null
         && Buffer.byteLength(content, 'utf8') < this.config.diffBasisMaxBytes
-      const pinned = await this.pinnedDestination(target, signal)
-      const writePath = this.destinationPath(target, pinned)
+      const pinned = await this.pinnedParent(target, signal)
+      const writePath = this.pinnedChildPath(target, pinned)
       try {
         // The diff basis is read through the SAME verified destination the write
         // uses, so a swapped component can never supply the before-text.
@@ -425,8 +430,8 @@ export class LocalFileSystem extends FileSystem {
         throw new FsError(`cannot edit "${target.displayPath}": file changed since it was read`, 'FS_STALE_VERSION')
       }
 
-      const pinned = await this.pinnedDestination(target, signal)
-      const writePath = this.destinationPath(target, pinned)
+      const pinned = await this.pinnedParent(target, signal)
+      const writePath = this.pinnedChildPath(target, pinned)
       try {
         // Read and write through the SAME verified destination: the literal match
         // applies to the pinned file, never to a swapped one.
@@ -454,22 +459,37 @@ export class LocalFileSystem extends FileSystem {
   ): Promise<FsEditOutcome> {
     return this.withLock(target.targetKey, async () => {
       const existing = await this.requireFile(target, expected, 'patch')
-      const original = await readForEdit(target.targetKey, target.displayPath, signal)
-      const after = this.patchContent(target, original.content, hunks)
-      await writeFileAtomic(target.targetKey, restoreLineEndings(after, original.lineEndings), existing.mode, signal, this.internals,
-        { displayPath: target.displayPath })
-      return { version: this.versionAfterWrite(await probe(target.targetKey), target), before: original.content, after }
+      const pinned = await this.pinnedParent(target, signal)
+      const writePath = this.pinnedChildPath(target, pinned)
+      try {
+        // Read and write through the SAME verified destination: the hunks apply
+        // to the pinned file, never to a swapped one.
+        const original = await this.readTargetForEdit(target, pinned, signal)
+        const after = this.patchContent(target, original.content, hunks)
+        await writeFileAtomic(writePath, restoreLineEndings(after, original.lineEndings), existing.mode, signal, this.internals,
+          { displayPath: target.displayPath })
+        return { version: this.versionAfterWrite(await probe(writePath), target), before: original.content, after }
+      } finally {
+        await pinned?.close()
+      }
     })
   }
 
   override async deleteFile(target: FsTarget, expected?: { version: FsVersion }, signal?: AbortSignal): Promise<FsDeleteOutcome> {
     return this.withLock(target.targetKey, async () => {
       await this.requireFile(target, expected, 'delete')
-      const before = await readTextForDiff(target.targetKey, this.config.diffBasisMaxBytes, signal)
-      await this.internals.inspectBeforeMutation?.(target)
-      if (signal?.aborted) throw new FsError('delete aborted', 'FS_ABORTED')
-      await removeFile(target.targetKey, target.displayPath, this.internals)
-      return { before }
+      const pinned = await this.pinnedParent(target, signal)
+      try {
+        // The before-content comes from the verified descriptor, so a target
+        // swapped after resolution fails here instead of being unlinked by path.
+        const before = await this.readDiffBasis(target, pinned, signal)
+        await this.internals.inspectBeforeMutation?.(target)
+        if (signal?.aborted) throw new FsError('delete aborted', 'FS_ABORTED')
+        await removeFile(this.pinnedChildPath(target, pinned), target.displayPath, this.internals)
+        return { before }
+      } finally {
+        await pinned?.close()
+      }
     })
   }
 
@@ -482,32 +502,44 @@ export class LocalFileSystem extends FileSystem {
     return this.withLocks([source.targetKey, destination.targetKey], async () => {
       const sourceInfo = await this.requireFile(source, options.expectedSource, 'move')
       const existing = await this.writeTarget(destination, options.expectedDestination)
-      const original = await readForEdit(source.targetKey, source.displayPath, signal)
-      const after = options.hunks === undefined ? original.content : this.patchContent(source, original.content, options.hunks)
-      const content = restoreLineEndings(after, original.lineEndings)
-      const before = existing && Buffer.byteLength(content, 'utf8') < this.config.diffBasisMaxBytes
-        ? await readTextForDiff(destination.targetKey, this.config.diffBasisMaxBytes, signal) : null
-      await this.internals.inspectBeforeMutation?.(source)
-      if (signal?.aborted) throw new FsError('move aborted', 'FS_ABORTED')
-      // After this checkpoint, complete both effects and report them even if cancellation arrives.
-      await writeFileAtomic(destination.targetKey, content, sourceInfo.mode, undefined, this.internals, {
-        displayPath: destination.displayPath,
-        createIfAbsent: options.expectedDestination?.kind === 'createIfAbsent',
-        existingDestination: existing !== null,
-      })
-      const outcome: FsWriteOutcome = {
-        operation: existing ? 'update' : 'create',
-        version: this.versionAfterWrite(await probe(destination.targetKey), destination), before, after,
-      }
-      const sourceBefore = Buffer.byteLength(original.content, 'utf8') < this.config.diffBasisMaxBytes ? original.content : null
+      let sourcePinned: PinnedDirectory | undefined
+      let destinationPinned: PinnedDirectory | undefined
       try {
-        await removeFile(source.targetKey, source.displayPath, this.internals)
-      } catch (error) {
-        // removeFile maps I/O failures; unexpected defects must still reject.
-        if (!(error instanceof FsError)) throw error
-        return { sourceBefore, destination: outcome, sourceDeleted: false, sourceFailure: { code: error.code, message: error.message } }
+        // Pin the source before reading it; the destination is pinned only after
+        // the source content is known, so a failed patch creates no directories.
+        sourcePinned = await this.pinnedParent(source, signal)
+        const original = await this.readTargetForEdit(source, sourcePinned, signal)
+        const after = options.hunks === undefined ? original.content : this.patchContent(source, original.content, options.hunks)
+        const content = restoreLineEndings(after, original.lineEndings)
+        destinationPinned = await this.pinnedParent(destination, signal)
+        const writePath = this.pinnedChildPath(destination, destinationPinned)
+        const before = existing && Buffer.byteLength(content, 'utf8') < this.config.diffBasisMaxBytes
+          ? await this.readDiffBasis(destination, destinationPinned, signal) : null
+        await this.internals.inspectBeforeMutation?.(source)
+        if (signal?.aborted) throw new FsError('move aborted', 'FS_ABORTED')
+        // After this checkpoint, complete both effects and report them even if cancellation arrives.
+        await writeFileAtomic(writePath, content, sourceInfo.mode, undefined, this.internals, {
+          displayPath: destination.displayPath,
+          createIfAbsent: options.expectedDestination?.kind === 'createIfAbsent',
+          existingDestination: existing !== null,
+        })
+        const outcome: FsWriteOutcome = {
+          operation: existing ? 'update' : 'create',
+          version: this.versionAfterWrite(await probe(writePath), destination), before, after,
+        }
+        const sourceBefore = Buffer.byteLength(original.content, 'utf8') < this.config.diffBasisMaxBytes ? original.content : null
+        try {
+          await removeFile(this.pinnedChildPath(source, sourcePinned), source.displayPath, this.internals)
+        } catch (error) {
+          // removeFile maps I/O failures; unexpected defects must still reject.
+          if (!(error instanceof FsError)) throw error
+          return { sourceBefore, destination: outcome, sourceDeleted: false, sourceFailure: { code: error.code, message: error.message } }
+        }
+        return { sourceBefore, destination: outcome, sourceDeleted: true }
+      } finally {
+        // Close both pins even when one close fails; the descriptors are independent.
+        await Promise.all([destinationPinned?.close(), sourcePinned?.close()])
       }
-      return { sourceBefore, destination: outcome, sourceDeleted: true }
     })
   }
 

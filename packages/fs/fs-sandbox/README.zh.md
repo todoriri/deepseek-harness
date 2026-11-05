@@ -79,7 +79,7 @@ kind: "package-reference"
 
 ### 变更如何被围栏
 
-每次变更先解析按调用策略（`danger-full-access` 原样返回调用方目标；`read-only` 抛出 `FS_SANDBOX_DENIED`），`workspace-write` 则立即重新规范化目标，并要求它位于由唯一的 `writableRoots` 函数派生的某个可写根之下——与 Seatbelt profile 授权的集合相同，因此 fs 围栏与 bash runner 不会漂移。被变更的正是这个新目标，因此工具解析后被替换的符号链接祖先也会被发现。写入或编辑随后按描述符固定目标目录（`fs-local` 的 `verifyOpens`，由本后端启用）：暂存目录、其中的文件以及发布时的 rename 全部经由 `/proc/self/fd/<dirfd>/…`，因此在该包含检查之后被替换的组件也无法改写其落点。`patchText`、`deleteFile` 与 `moveFile` 按路径变更这个新目标。
+每次变更先解析按调用策略（`danger-full-access` 原样返回调用方目标；`read-only` 抛出 `FS_SANDBOX_DENIED`），`workspace-write` 则立即重新规范化目标，并要求它位于由唯一的 `writableRoots` 函数派生的某个可写根之下——与 Seatbelt profile 授权的集合相同，因此 fs 围栏与 bash runner 不会漂移。被变更的正是这个新目标，因此工具解析后被替换的符号链接祖先也会被发现。随后每次变更都按描述符固定目标目录（`fs-local` 的 `verifyOpens`，由本后端启用）：`writeText`、`editText` 与 `patchText` 从该描述符读取变更前内容并经由它暂存、发布；`deleteFile` 从该描述符读取变更前内容并经由它删除；`moveFile` 同时固定源与目标两个目录。暂存目录、其中的文件以及发布时的 rename 全部经由 `/proc/self/fd/<dirfd>/…`，因此在该包含检查之后被替换的组件也无法改写任何变更的落点。
 
 ### 读取如何被围栏
 
@@ -87,7 +87,7 @@ kind: "package-reference"
 
 ### 威胁模型
 
-在 Linux 上，解析到系统调用之间的窗口由描述符固定关闭：读取先 open 并核验所打开的描述符正是被解析的目标，写入或编辑则按描述符固定目标目录，因此被限制的 worker 换入路径的符号链接不再能改写这些操作；补丁、删除与移动仍保留该窗口。在没有 `/proc/self/fd` 的地方（Node 不提供 `openat`），这些原语不生效，窗口仍然存在——后端会报告这一平台事实，而不是隐瞒它。拒绝是结构化 `FsError`，而不是 stderr 推断——进程内围栏准确知道自己拒绝了什么。
+在 Linux 上，解析到系统调用之间的窗口由描述符固定关闭：读取先 open 并核验所打开的描述符正是被解析的目标，每次变更也按描述符固定目标目录，因此被限制的 worker 换入路径的符号链接不再能改写这些操作。在没有 `/proc/self/fd` 的地方（Node 不提供 `openat`），这些原语不生效，窗口仍然存在——后端会报告这一平台事实，而不是隐瞒它。拒绝是结构化 `FsError`，而不是 stderr 推断——进程内围栏准确知道自己拒绝了什么。
 
 </details>
 
@@ -131,7 +131,7 @@ kind: "package-reference"
 
 这些限制说明沙箱后端何时不合适，或何时需要特别的运维注意。它们是当前包约束，不是通用沙箱对比或任务积压。
 
-- **策略围栏，而非内核边界**：该检查是可信代码处理模型控制的路径。在 Linux 上，描述符固定关闭了读取、写入与编辑的解析到系统调用窗口，补丁、删除与移动仍保留该窗口；在没有 `/proc/self/fd` 的主机上该窗口仍然存在，而对抗性宿主进程在任何情况下都不在范围内。不可信代码的内核级隔离仍属于 `ctx.shell`。
+- **策略围栏，而非内核边界**：该检查是可信代码处理模型控制的路径。在 Linux 上，描述符固定关闭了读取与每次变更的解析到系统调用窗口；在没有 `/proc/self/fd` 的主机上该窗口仍然存在，而对抗性宿主进程在任何情况下都不在范围内。不可信代码的内核级隔离仍属于 `ctx.shell`。
 - **围栏与 runner 的一致性由单一所有方派生**：可写集合来自 `writableRoots`，该函数与 Seatbelt profile 共享；在其他位置定义可写集合的 runner profile 会发生漂移。
 - **要求 `ctx.sandboxPolicy`**：工具使用它解析每个会话策略，后端用它处理无 agent（智能体）调用的回退；未组合该服务时，后端不会实施约束。
 

@@ -22,11 +22,12 @@
  * ACTUALLY opened, so this backend also turns on the local backend's
  * descriptor-level verification (`verifyOpens`): a read opens the canonical
  * target, verifies that the descriptor's reported path IS that target, and serves
- * the bytes from the descriptor; `writeText` and `editText` pin the destination
- * directory by descriptor and stage/publish through it. A symlink swapped into
- * the path after the containment check therefore fails the read, write or edit
- * instead of escaping the fence; `patchText`, `deleteFile` and `moveFile` keep
- * the resolve-then-mutate window. That primitive needs `/proc/self/fd`
+ * the bytes from the descriptor. Every mutation pins its target directory by
+ * descriptor: `writeText`, `editText` and `patchText` read their before-content
+ * and stage/publish through it; `deleteFile` reads and unlinks through it;
+ * `moveFile` pins both the source and destination directories. A symlink swapped
+ * into the path after the containment check therefore fails the read or mutation
+ * instead of escaping the fence. That primitive needs `/proc/self/fd`
  * (`dsh-fs-local`'s `FD_PINNING_AVAILABLE`); on a host without it verification is
  * inert and this fence keeps its resolve-then-open window — see the README's
  * "not verified" note.
@@ -309,8 +310,9 @@ export class SandboxedFileSystem extends LocalFileSystem {
    * re-canonicalizes NOW (`resolve` realpaths the deepest existing ancestor,
    * reflecting a concurrently swapped symlink), requires containment under a
    * writable root, and returns THAT fresh target; `danger-full-access` returns
-   * the caller's target unfenced. A write or edit then pins the destination
-   * directory by descriptor (`verifyOpens`) and stages/publishes through it, so a
+   * the caller's target unfenced. Every mutation then pins its target directory by
+   * descriptor (`verifyOpens`) — `moveFile` pins both the source and destination —
+   * and reads, stages, publishes or unlinks through the pinned descriptor, so a
    * component swapped after this check cannot redirect it either. Throws the
    * structured `FS_SANDBOX_DENIED` on refusal — the tool layer maps it to the
    * model-facing `[sandbox: …]` marker and the escalation hint.

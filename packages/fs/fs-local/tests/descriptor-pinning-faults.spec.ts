@@ -99,6 +99,15 @@ describe.runIf(FD_PINNING_AVAILABLE)('verified file opens under injected faults'
     expect(await readFile(path, 'utf8')).toBe('after\n')
   })
 
+  it('drops only the diff basis when the overwritten file is unreadable', async () => {
+    const path = join(dir, 'unreadable.txt')
+    await writeFile(path, 'before\n')
+    faults.open = at => throughDescriptor(at, 'unreadable.txt') ? errno('EACCES') : undefined
+    const outcome = await fs.writeText(await fs.resolve(path), 'after\n')
+    expect(outcome).toMatchObject({ operation: 'update', before: null, after: 'after\n' })
+    expect(await readFile(path, 'utf8')).toBe('after\n')
+  })
+
   it('surfaces an edit open refusal other than not-found or a symlink unchanged', async () => {
     const path = join(dir, 'edit.txt')
     await writeFile(path, 'original\n')
@@ -148,5 +157,96 @@ describe.runIf(FD_PINNING_AVAILABLE)('intermediate directory creation under inje
     await expect(fs.writeText(await fs.resolve(join(dir, 'swapped', 'f.txt')), 'x', { kind: 'createIfAbsent' }))
       .rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
     expect(existsSync(join(dir, 'swapped', 'f.txt'))).toBe(false)
+  })
+})
+
+describe.runIf(FD_PINNING_AVAILABLE)('pinned patch, delete and move opens under injected faults', () => {
+  const PATCH = [{ lineNumber: 3, oldLines: ['old'], newLines: ['new'], isEndOfFile: false }]
+
+  it('surfaces a patch open refusal other than not-found or a symlink unchanged', async () => {
+    const path = join(dir, 'patch.txt')
+    await writeFile(path, 'old\n')
+    faults.open = at => throughDescriptor(at, 'patch.txt') ? errno('EACCES') : undefined
+    await expect(fs.patchText(await fs.resolve(path), PATCH)).rejects.toMatchObject({ code: 'EACCES' })
+    expect(await readFile(path, 'utf8')).toBe('old\n')
+  })
+
+  it('refuses a patch whose opened file is not the pinned directory’s child', async () => {
+    const path = join(dir, 'moved.txt')
+    await writeFile(path, 'old\n')
+    faults.readlink = link => link.endsWith('/moved.txt') ? '/elsewhere/moved.txt' : link
+    await expect(fs.patchText(await fs.resolve(path), PATCH)).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    expect(await readFile(path, 'utf8')).toBe('old\n')
+  })
+
+  it('drops only the delete basis when the before-content open is refused, and deletes the file', async () => {
+    const path = join(dir, 'del.txt')
+    await writeFile(path, 'old\n')
+    faults.open = at => throughDescriptor(at, 'del.txt') ? errno('EACCES') : undefined
+    expect(await fs.deleteFile(await fs.resolve(path))).toEqual({ before: null })
+    expect(existsSync(path)).toBe(false)
+  })
+
+  it('refuses a delete whose opened file is not the pinned directory’s child', async () => {
+    const path = join(dir, 'doomed.txt')
+    await writeFile(path, 'old\n')
+    faults.readlink = link => link.endsWith('/doomed.txt') ? '/elsewhere/doomed.txt' : link
+    await expect(fs.deleteFile(await fs.resolve(path))).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    expect(await readFile(path, 'utf8')).toBe('old\n')
+  })
+
+  it('drops the delete basis when the verified open reports the target missing', async () => {
+    const path = join(dir, 'basis.txt')
+    await writeFile(path, 'old\n')
+    faults.open = at => throughDescriptor(at, 'basis.txt') ? errno('ENOENT') : undefined
+    expect(await fs.deleteFile(await fs.resolve(path))).toEqual({ before: null })
+    expect(existsSync(path)).toBe(false)
+  })
+
+  it('surfaces a move source open refusal unchanged and leaves both files', async () => {
+    const source = join(dir, 'src.txt')
+    await writeFile(source, 'old\n')
+    const destination = join(dir, 'dst.txt')
+    await writeFile(destination, 'previous\n')
+    faults.open = at => throughDescriptor(at, 'src.txt') ? errno('EACCES') : undefined
+    await expect(fs.moveFile(await fs.resolve(source), await fs.resolve(destination), {}))
+      .rejects.toMatchObject({ code: 'EACCES' })
+    expect(await readFile(source, 'utf8')).toBe('old\n')
+    expect(await readFile(destination, 'utf8')).toBe('previous\n')
+  })
+
+  it('refuses a move whose opened source is not the pinned directory’s child', async () => {
+    const source = join(dir, 'moving.txt')
+    await writeFile(source, 'old\n')
+    const destination = join(dir, 'dst.txt')
+    faults.readlink = link => link.endsWith('/moving.txt') ? '/elsewhere/moving.txt' : link
+    await expect(fs.moveFile(await fs.resolve(source), await fs.resolve(destination), {}))
+      .rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    expect(await readFile(source, 'utf8')).toBe('old\n')
+    expect(existsSync(destination)).toBe(false)
+  })
+
+  it('drops only the destination basis when its before-content open is refused, and completes the move', async () => {
+    const source = join(dir, 'src.txt')
+    await writeFile(source, 'old\n')
+    const destination = join(dir, 'dst.txt')
+    await writeFile(destination, 'previous\n')
+    faults.open = at => throughDescriptor(at, 'dst.txt') ? errno('EACCES') : undefined
+    const outcome = await fs.moveFile(await fs.resolve(source), await fs.resolve(destination), {})
+    expect(outcome).toMatchObject({ sourceDeleted: true, destination: { operation: 'update', before: null, after: 'old\n' } })
+    expect(existsSync(source)).toBe(false)
+    expect(await readFile(destination, 'utf8')).toBe('old\n')
+  })
+
+  it('refuses a move whose destination directory descriptor is not the expected directory', async () => {
+    await realMkdir(join(dir, 'dest-dir'))
+    const source = join(dir, 'src.txt')
+    await writeFile(source, 'old\n')
+    const destination = join(dir, 'dest-dir', 'dst.txt')
+    faults.readlink = link => link === join(dir, 'dest-dir') ? '/elsewhere/dest-dir' : link
+    await expect(fs.moveFile(await fs.resolve(source), await fs.resolve(destination), {}))
+      .rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    expect(await readFile(source, 'utf8')).toBe('old\n')
+    expect(existsSync(join(dir, 'dest-dir', 'dst.txt'))).toBe(false)
   })
 })
