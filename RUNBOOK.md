@@ -2,8 +2,9 @@
 
 Operational record for running `dsh web` (the DeepSeek Harness browser UI) as a
 systemd service on this host. Applies to this machine (`rai`, user `todoriri`,
-Node v26.8.1, repository checkout at `/mnt/data1/Projects/deepseek-harness`,
-pinned to release `dsh-v0.1.2-alpha.5`).
+Node v24.22.2 from nvm, repository checkout at
+`/mnt/data1/Projects/deepseek-harness` on the fork's `master`, which merges
+upstream release tags; no release tag is pinned).
 
 **Current setup: local-only.** The Web UI is served on loopback
 (`127.0.0.1:3080`) for local use directly on `rai`. There is no LAN/firewall
@@ -20,11 +21,15 @@ exposure.
 ### Service file
 `/etc/systemd/system/dsh-web.service` (ExecStart):
 ```
-/home/todoriri/.nvm/versions/node/v22.20.0/bin/node \
+/home/todoriri/.nvm/versions/node/v24.22.2/bin/node \
   /mnt/data1/Projects/deepseek-harness/apps/cli/lib/bin.js web \
-  --host 127.0.0.1 --port 3080
+  --host 127.0.0.1 --port 3080 --trusted-host 192.168.1.52 --no-open
 ```
 
+- The unit file alone is the whole configuration; there are no drop-ins under
+  `dsh-web.service.d/`. The checkout declares `engines.node >=24.9.0`, so the
+  Node in `ExecStart` and the `Environment=PATH=` entry (which puts the same
+  nvm `bin/` first, for `pnpm` and child `node` processes) change together.
 - Runs as `User=todoriri` with `WorkingDirectory` = the checkout.
 - `DSH_PERMISSION_MODE=workspace-write` keeps the `ask` approval policy
   (vs `danger-full-access`, which sets approval to `never`).
@@ -58,11 +63,14 @@ The service runs the *built* launcher, so after pulling new commits: reinstall,
 **clean**, rebuild, restart.
 
 ```sh
+export PATH=~/.nvm/versions/node/v24.22.2/bin:$PATH   # the service's Node; nvm's default alias and the ambient node differ
 git fetch origin && git merge --ff-only origin/master
 pnpm install
 pnpm run clean          # REQUIRED on large jumps (see note below)
 pnpm run build
 sudo systemctl restart dsh-web
+# loopcc pins built digests; a mismatch here refuses every drive until the operator re-pins
+(cd /mnt/data1/Projects/loopcc && bin/loopcc pin --check --target space-shooter)
 ```
 
 Skipping `pnpm run clean` makes `pnpm run build` (tsdown) fail with
